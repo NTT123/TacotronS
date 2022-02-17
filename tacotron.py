@@ -118,28 +118,21 @@ class Tacotron(pax.Module):
         attn_pr = jax.nn.one_hot(
             jnp.zeros((N,), dtype=jnp.int32), num_classes=L, axis=-1
         )
-        states = (
-            self.attn_rnn.initial_state(N),
+
+        attn_state = (self.attn_rnn.initial_state(N), attn_context, attn_pr)
+        mel_rnn_states = (
             self.mel_rnn1.initial_state(N),
             self.mel_rnn2.initial_state(N),
-            attn_context,
-            attn_pr,
         )
-        return states
+        return attn_state, mel_rnn_states
 
-    def monotonic_attention(
-        self,
-        attn_rnn_state,
-        attn_context,
-        x,
-        text,
-        text_key,
-        attn_rng_key,
-        prev_attn_pr,
-    ):
+    def monotonic_attention(self, prev_state, inputs, envs):
         """
         Stepwise monotonic attention
         """
+        attn_rnn_state, attn_context, prev_attn_pr = prev_state
+        x, attn_rng_key = inputs
+        text, text_key = envs
         attn_rnn_input = jnp.concatenate((x, attn_context), axis=-1)
         attn_rnn_state, attn_rnn_output = self.attn_rnn(attn_rnn_state, attn_rnn_input)
         attn_query_input = jax.nn.relu(attn_rnn_output + attn_context)
@@ -165,7 +158,28 @@ class Tacotron(pax.Module):
         )
         attn_pr = pr_stay * prev_attn_pr + pr_new_location
         attn_context = jnp.einsum("NL,NLD->ND", attn_pr, text)
-        return attn_rnn_state, attn_context, attn_pr, attn_rnn_output
+        new_state = (attn_rnn_state, attn_context, attn_pr)
+        return new_state, attn_rnn_output
+
+    def zoneout_lstm(self, lstm_core, rng_key, zoneout_pr=0.1):
+        """
+        Return a zoneout lstm core.
+
+        It will zoneout the new hidden states and keep the new cell states unchanged.
+        """
+
+        def core(state, x):
+            new_state, _ = lstm_core(state, x)
+            h_old = state.hidden
+            h_new = new_state.hidden
+            if self.training:
+                mask = jax.random.bernoulli(rng_key, zoneout_pr, h_old.shape)
+                h_new = h_old * mask + h_new * (1.0 - mask)
+            else:
+                h_new = h_old * zoneout_pr + h_new * (1.0 - zoneout_pr)
+            return pax.LSTMState(h_new, new_state.cell), h_new
+
+        return core
 
     def inference(self, text, seed=42, max_len=1000):
         """
@@ -177,33 +191,22 @@ class Tacotron(pax.Module):
         mel = self.go_frame(N)
 
         @jax.jit
-        def step(decoder_state, rng_key, mel):
+        def step(attn_state, mel_rnn_states, rng_key, mel):
             k1, k2, rng_key, rng_key_next = jax.random.split(rng_key, 4)
             mel = self.pre_net(mel, k1, k2)
-            (
-                attn_rnn_state,
-                mel_rnn_state1,
-                mel_rnn_state2,
-                attn_context,
-                prev_attn_pr,
-            ) = decoder_state
-            (
-                attn_rnn_state,
-                attn_context,
-                attn_pr,
-                attn_rnn_output,
-            ) = self.monotonic_attention(
-                attn_rnn_state, attn_context, mel, text, text_key, rng_key, prev_attn_pr
+            attn_inputs = (mel, rng_key)
+            attn_envs = (text, text_key)
+            attn_state, attn_rnn_output = self.monotonic_attention(
+                attn_state, attn_inputs, attn_envs
             )
-
+            (_, attn_context, _) = attn_state
+            (mel_rnn_state1, mel_rnn_state2) = mel_rnn_states
             mel_rnn1_input = jax.nn.relu(attn_rnn_output + attn_context)
-            mel_rnn_state1, mel_rnn_output1 = self.mel_rnn1(
-                mel_rnn_state1, mel_rnn1_input
-            )
+            mel_rnn1 = self.zoneout_lstm(self.mel_rnn1, None)
+            mel_rnn_state1, mel_rnn_output1 = mel_rnn1(mel_rnn_state1, mel_rnn1_input)
             mel_rnn2_input = jax.nn.relu(mel_rnn1_input + mel_rnn_output1)
-            mel_rnn_state2, mel_rnn_output2 = self.mel_rnn2(
-                mel_rnn_state2, mel_rnn2_input
-            )
+            mel_rnn2 = self.zoneout_lstm(self.mel_rnn2, None)
+            mel_rnn_state2, mel_rnn_output2 = mel_rnn2(mel_rnn_state2, mel_rnn2_input)
             x = jax.nn.relu(mel_rnn1_input + mel_rnn_output1 + mel_rnn_output2)
             x = self.output_fc(x)
             N, D2 = x.shape
@@ -212,22 +215,18 @@ class Tacotron(pax.Module):
             x = jnp.reshape(x, (N, self.rr, -1))
             mel = x[..., :-1]
             eos = x[..., -1]
-            decoder_state = (
-                attn_rnn_state,
-                mel_rnn_state1,
-                mel_rnn_state2,
-                attn_context,
-                attn_pr,
-            )
-            return decoder_state, rng_key_next, (mel, eos)
+            mel_rnn_states = (mel_rnn_state1, mel_rnn_state2)
+            return attn_state, mel_rnn_states, rng_key_next, (mel, eos)
 
-        decoder_state = self.decoder_initial_state(N, L)
+        attn_state, mel_rnn_states = self.decoder_initial_state(N, L)
         rng_key = jax.random.PRNGKey(seed)
         mels = []
         count = 0
         while True:
             count = count + 1
-            decoder_state, rng_key, (mel, eos) = step(decoder_state, rng_key, mel)
+            attn_state, mel_rnn_states, rng_key, (mel, eos) = step(
+                attn_state, mel_rnn_states, rng_key, mel
+            )
             mels.append(mel)
             if eos[0, -1].item() > 0 or count > max_len:
                 break
@@ -244,56 +243,47 @@ class Tacotron(pax.Module):
         text_key = self.text_key_fc(text)
 
         def decode_loop(prev_states, inputs):
-            (
-                attn_rnn_state,
-                mel_rnn_state1,
-                mel_rnn_state2,
-                attn_context,
-                prev_attn_pr,
-            ) = prev_states
-            x, attn_rng_key = inputs
+            attn_state, mel_rnn_states = prev_states
+            mel_rnn_state1, mel_rnn_state2 = mel_rnn_states
+            x, attn_rng_key, zoneout_rng_key = inputs
 
-            (
-                attn_rnn_state,
-                attn_context,
-                attn_pr,
-                attn_rnn_output,
-            ) = self.monotonic_attention(
-                attn_rnn_state,
-                attn_context,
-                x,
-                text,
-                text_key,
-                attn_rng_key[0],
-                prev_attn_pr,
+            attn_input = (x, attn_rng_key[0])
+            attn_envs = (text, text_key)
+
+            attn_state, attn_rnn_output = self.monotonic_attention(
+                attn_state, attn_input, attn_envs
             )
+            (_, attn_context, attn_pr) = attn_state
 
             ## decode
             mel_rnn1_input = jax.nn.relu(attn_rnn_output + attn_context)
-            mel_rnn_state1, mel_rnn_output1 = self.mel_rnn1(
-                mel_rnn_state1, mel_rnn1_input
-            )
+            zoneout_rng_key = zoneout_rng_key[0]
+            mel_rnn1 = self.zoneout_lstm(self.mel_rnn1, zoneout_rng_key[0])
+            mel_rnn_state1, mel_rnn_output1 = mel_rnn1(mel_rnn_state1, mel_rnn1_input)
             mel_rnn2_input = jax.nn.relu(mel_rnn1_input + mel_rnn_output1)
-            mel_rnn_state2, mel_rnn_output2 = self.mel_rnn2(
-                mel_rnn_state2, mel_rnn2_input
-            )
+            mel_rnn2 = self.zoneout_lstm(self.mel_rnn2, zoneout_rng_key[1])
+            mel_rnn_state2, mel_rnn_output2 = mel_rnn2(mel_rnn_state2, mel_rnn2_input)
 
             output = jax.nn.relu(mel_rnn1_input + mel_rnn_output1 + mel_rnn_output2)
-
-            return (
-                (attn_rnn_state, mel_rnn_state1, mel_rnn_state2, attn_context, attn_pr),
-                (output, attn_pr[0]),
-            )
+            mel_rnn_states = (mel_rnn_state1, mel_rnn_state2)
+            states = (attn_state, mel_rnn_states)
+            return states, (output, attn_pr[0])
 
         N, L, D = text.shape
-        states = self.decoder_initial_state(N, L)
+        decoder_states = self.decoder_initial_state(N, L)
         attn_rng_keys = self.attn_rng.next_rng_key(mel.shape[1])
         attn_rng_keys = jnp.stack(attn_rng_keys)[None]
-        states, (x, attn_log) = pax.scan(
-            decode_loop, states, (mel, attn_rng_keys), time_major=False
+        zoneout_rng_keys = self.attn_rng.next_rng_key(mel.shape[1] * 2)
+        zoneout_rng_keys = jnp.stack(zoneout_rng_keys)[None]
+        zoneout_rng_keys = zoneout_rng_keys.reshape((1, mel.shape[1], 2, -1))
+        decoder_states, (x, attn_log) = pax.scan(
+            decode_loop,
+            decoder_states,
+            (mel, attn_rng_keys, zoneout_rng_keys),
+            time_major=False,
         )
         self.attn_log = attn_log
-        del states
+        del decoder_states
         x = self.output_fc(x)
 
         N, T2, D2 = x.shape
