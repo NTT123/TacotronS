@@ -1,12 +1,12 @@
 [tool.poetry]
 name = "stepwise_tacotron"
-version = "0.1.0"
+version = "0.1.1"
 description = "Tacotron with stepwise monotonic attention"
 authors = ["Thông Nguyễn"]
 license = "MIT"
 
 [tool.poetry.dependencies]
-python = ">=3.8,<3.11"
+python = ">=3.7,<3.11"
 Unidecode = "^1.3.2"
 toml = "^0.10.2"
 tensorflow = "^2.8.0"
@@ -15,9 +15,9 @@ opax = "^0.2.8"
 jax = "^0.3.0"
 jaxlib = "^0.3.0"
 matplotlib = "^3.5.1"
-numpy = "^1.22.2"
 librosa = "^0.9.1"
 tqdm = "^4.62.3"
+pooch = "^1.6.0"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
@@ -32,7 +32,6 @@ MEL_DIM = 80 # the dimension of melspectrogram features
 MEL_MIN = 1e-5
 MODEL_PREFIX = "mono_tts"
 PAD_TOKEN = 0
-RAW_DATA_DIR = "/tmp/MonoTTS"
 RR = 2 # reduction factor
 SAMPLE_RATE = 22050 # convert to this sample rate if needed
 SIGMOID_NOISE = 2.0

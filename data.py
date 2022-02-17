@@ -136,17 +136,21 @@ def create_tf_data(data_dir: Path, output_dir: Path):
     )
     tf.data.experimental.save(dataset, str(output_dir))
 
+    # save the alphabet for inference mode
+    with open(output_dir / "alphabet.txt", "w", encoding="utf-8") as file:
+        for ch in alphabet:
+            file.write(ch + "\n")
+
 
 parser = ArgumentParser()
 parser.add_argument("wav_dir", type=Path)
 wav_dir = parser.parse_args().wav_dir
 
 # prepare tensorflow dataset
-if not os.path.isdir(TF_DATA_DIR):
-    print(f"Loading data from the directory {wav_dir}")
-    create_tf_data(wav_dir, TF_DATA_DIR)
+print(f"Loading data from the directory '{wav_dir}'")
+create_tf_data(wav_dir, TF_DATA_DIR)
 
 print(
-    f"Created a tensorflow dataset at {TF_DATA_DIR}.\n"
+    f"Created a tensorflow dataset at '{TF_DATA_DIR}'.\n\n"
     f"Run 'python train.py' to train your model."
 )
