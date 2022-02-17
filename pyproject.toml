@@ -24,18 +24,18 @@ requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"
 
 [tacotron]
-ATTN_BIAS = 1.5 # control how fast the attention will move forward
-BATCH_SIZE = 2
+BATCH_SIZE = 64
 LR=1e-3 # learning rate
-MAX_RR=2
+MODEL_PREFIX = "mono_tts"
+LOG_DIR = "./logs"
+TF_DATA_DIR = "./tf_data" # tensorflow data directory
+SAMPLE_RATE = 22050 # convert to this sample rate if needed
 MEL_DIM = 80 # the dimension of melspectrogram features
 MEL_MIN = 1e-5
-MODEL_PREFIX = "mono_tts"
 PAD_TOKEN = 0
 RR = 2 # reduction factor
-SAMPLE_RATE = 22050 # convert to this sample rate if needed
+MAX_RR=2
+ATTN_BIAS = 1.5 # control how fast the attention will move forward
 SIGMOID_NOISE = 2.0
 TEST_DATA_SIZE = 1024
-TF_DATA_DIR = "./tf_data" # tensorflow data directory
 USE_MP = false  # use mixed-precision training
-LOG_DIR = "./logs"

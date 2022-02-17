@@ -23,7 +23,6 @@ def download_ljs_dataset():
         progressbar=True,
     )
     readme_file = Path(sorted(file_paths)[0])
-    print(readme_file)
     assert readme_file.name == "README"
     return readme_file.parent
 
