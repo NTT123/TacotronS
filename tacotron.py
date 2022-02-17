@@ -10,7 +10,9 @@ class Tacotron(pax.Module):
     It uses stepwise monotonic attention for robust attention.
     """
 
-    def __init__(self, mel_dim: int, attn_bias, rr, max_rr, mel_min, sigmoid_noise):
+    def __init__(
+        self, mel_dim: int, attn_bias, rr, max_rr, mel_min, sigmoid_noise, pad_token
+    ):
         super().__init__()
         attn_hidden_dim = 128
         prenet_dim = 256
@@ -23,6 +25,7 @@ class Tacotron(pax.Module):
         self.mel_dim = mel_dim
         self.mel_min = mel_min
         self.sigmoid_noise = sigmoid_noise
+        self.pad_token = pad_token
 
         # encoder submodules
         self.encoder_embed = pax.Embed(256, text_dim)
@@ -36,7 +39,10 @@ class Tacotron(pax.Module):
                 name="conv_block",
             )
 
-        self.encoder_convs = pax.Sequential(conv_block(), conv_block(), conv_block())
+        self.encoder_conv1 = conv_block()
+        self.encoder_conv2 = conv_block()
+        self.encoder_conv3 = conv_block()
+
         self.encoder_gru_fwd = pax.GRU(text_dim, text_dim // 2)
         self.encoder_gru_bwd = pax.GRU(text_dim, text_dim // 2)
 
@@ -72,8 +78,11 @@ class Tacotron(pax.Module):
         Encode text to a sequence of real vectors
         """
         N, L = text.shape
+        text_mask = (text != self.pad_token)[..., None]
         x = self.encoder_embed(text)
-        x = self.encoder_convs(x)
+        x = self.encoder_conv1(x * text_mask)
+        x = self.encoder_conv2(x * text_mask)
+        x = self.encoder_conv3(x * text_mask)
         x_fwd = x
         x_bwd = jnp.flip(x, axis=1)
         x_fwd_states = self.encoder_gru_fwd.initial_state(N)
@@ -81,11 +90,27 @@ class Tacotron(pax.Module):
         x_fwd_states, x_fwd = pax.scan(
             self.encoder_gru_fwd, x_fwd_states, x_fwd, time_major=False
         )
+
+        reset_masks = (text == self.pad_token)[..., None]
+        reset_masks = jnp.flip(reset_masks, axis=1)
+        x_bwd_states0 = x_bwd_states
+
+        def gru_reset_core(prev, inputs):
+            x, reset_mask = inputs
+
+            def reset_state(x0, xt):
+                return jnp.where(reset_mask, x0, xt)
+
+            state, _ = self.encoder_gru_bwd(prev, x)
+            state = jax.tree_map(reset_state, x_bwd_states0, state)
+            return state, state.hidden
+
         x_bwd_states, x_bwd = pax.scan(
-            self.encoder_gru_bwd, x_bwd_states, x_bwd, time_major=False
+            gru_reset_core, x_bwd_states, (x_bwd, reset_masks), time_major=False
         )
         x_bwd = jnp.flip(x_bwd, axis=1)
         x = jnp.concatenate((x_fwd, x_bwd), axis=-1)
+        x = x * text_mask
         return x
 
     def pre_net(self, mel: jnp.ndarray, rng_key1=None, rng_key2=None) -> jnp.ndarray:

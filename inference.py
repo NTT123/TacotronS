@@ -39,6 +39,7 @@ net = Tacotron(
     max_rr=config["MAX_RR"],
     mel_min=config["MEL_MIN"],
     sigmoid_noise=config["SIGMOID_NOISE"],
+    pad_token=config["PAD_TOKEN"],
 )
 
 _, net, _ = load_ckpt(net, None, args.model)

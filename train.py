@@ -31,6 +31,7 @@ SIGMOID_NOISE = config["SIGMOID_NOISE"]
 TEST_DATA_SIZE = config["TEST_DATA_SIZE"]
 TF_DATA_DIR = config["TF_DATA_DIR"]
 USE_MP = config["USE_MP"]
+PAD_TOKEN = config["PAD_TOKEN"]
 
 
 def double_buffer(ds):
@@ -198,6 +199,7 @@ def train(batch_size: int = BATCH_SIZE, lr: float = LR):
         max_rr=MAX_RR,
         mel_min=MEL_MIN,
         sigmoid_noise=SIGMOID_NOISE,
+        pad_token=PAD_TOKEN,
     )
 
     if USE_MP:
