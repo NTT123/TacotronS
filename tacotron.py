@@ -138,19 +138,12 @@ class Tacotron(pax.Module):
         attn_query_input = jax.nn.relu(attn_rnn_output + attn_context)
         attn_query = self.attn_query_fc(attn_query_input)
         attn_hidden = jnp.tanh(attn_query[:, None, :] + text_key)
-        weight_norm = self.attn_score_weight_norm / jnp.linalg.norm(
-            self.attn_score_weight
-        )
-        score = jnp.einsum(
-            "NLD,D->NL", attn_hidden, self.attn_score_weight * weight_norm
-        )
+        weight_norm = jnp.linalg.norm(self.attn_score_weight)
+        score = jnp.dot(attn_hidden, self.attn_score_weight)
+        score = score * (self.attn_score_weight_norm / weight_norm)
         score = score + self.attn_score_bias
-        if self.training:
-            score = (
-                score
-                + jax.random.normal(attn_rng_key, score.shape) * self.sigmoid_noise
-            )
-        pr_stay = jax.nn.sigmoid(score)
+        noise = jax.random.normal(attn_rng_key, score.shape) * self.sigmoid_noise
+        pr_stay = jax.nn.sigmoid(score + noise)
         pr_move = 1.0 - pr_stay
         pr_new_location = pr_move * prev_attn_pr
         pr_new_location = jnp.pad(
