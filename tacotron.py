@@ -174,7 +174,6 @@ class Tacotron(pax.Module):
         text = self.encode_text(text)
         text_key = self.text_key_fc(text)
         N, L, D = text.shape
-        out = []
         mel = self.go_frame(N)
 
         @jax.jit

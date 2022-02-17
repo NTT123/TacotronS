@@ -26,15 +26,14 @@ def load_ckpt(net: pax.Module, optim: pax.Module, path):
     return dic["step"], net, optim
 
 
-def save_ckpt(step, net: pax.Module, optim: pax.Module):
+def save_ckpt(ckpt_dir: Path, prefix: str, step, net: pax.Module, optim: pax.Module):
     """
     save checkpoint to disk
     """
-    MODEL_PREFIX = load_config()["MODEL_PREFIX"]
     obj = {
         "step": step,
         "model_state_dict": net.state_dict(),
         "optim_state_dict": optim.state_dict(),
     }
-    with open(f"ckpts/{MODEL_PREFIX}_{step:07d}.ckpt", "wb") as f:
+    with open(ckpt_dir / f"{prefix}_{step:07d}.ckpt", "wb") as f:
         pickle.dump(obj, f)

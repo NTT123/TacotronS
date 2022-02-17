@@ -3,6 +3,7 @@ import time
 from pathlib import Path
 from typing import Tuple
 
+import fire
 import jax
 import jax.numpy as jnp
 import jmp
@@ -19,6 +20,7 @@ config = load_config()
 ATTN_BIAS = config["ATTN_BIAS"]
 BATCH_SIZE = config["BATCH_SIZE"]
 LOG_DIR = Path(config["LOG_DIR"])
+CKPT_DIR = Path(config["CKPT_DIR"])
 LR = config["LR"]
 MAX_RR = config["MAX_RR"]
 MEL_DIM = config["MEL_DIM"]
@@ -31,12 +33,9 @@ TF_DATA_DIR = config["TF_DATA_DIR"]
 USE_MP = config["USE_MP"]
 
 
-LOG_DIR.mkdir(parents=True, exist_ok=True)
-
-
 def double_buffer(ds):
     """
-    create a doudble-buffer iterator
+    create a double-buffer iterator
     """
     batch = None
 
@@ -101,11 +100,9 @@ def loss_fn(net: Tacotron, batch, scaler=None):
     """
     text, mel = batch
     mel = mel.astype(jnp.float32)
-    input_mel = jnp.pad(
-        mel[:, (RR - 1) :: RR][:, :-1],
-        [(0, 0), (1, 0), (0, 0)],
-        constant_values=jnp.log(MEL_MIN),
-    )
+    go_frame = net.go_frame(mel.shape[0])
+    input_mel = mel[:, (RR - 1) :: RR][:, :-1]
+    input_mel = jnp.concatenate((go_frame, input_mel), axis=1)
     mel_mask = mel > jnp.log(MEL_MIN) + 1e-5
     stop_token = mel[..., 0] <= jnp.log(MEL_MIN) + 1e-5
     net, (predicted_mel, predicted_eos) = pax.purecall(net, input_mel, text)
@@ -188,62 +185,72 @@ def eval_inference(step, net, test_data_loader):
     plt.close()
 
 
-net = Tacotron(
-    mel_dim=MEL_DIM,
-    attn_bias=ATTN_BIAS,
-    rr=RR,
-    max_rr=MAX_RR,
-    mel_min=MEL_MIN,
-    sigmoid_noise=SIGMOID_NOISE,
-)
+def train(batch_size: int = BATCH_SIZE, lr: float = LR):
+    """
+    train tacotron model
+    """
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    CKPT_DIR.mkdir(parents=True, exist_ok=True)
 
-if USE_MP:
-    scaler = jmp.DynamicLossScale(jnp.array(2 ** 15, dtype=jnp.float32))
-    net = net.apply(pax.experimental.default_mp_policy)
-else:
-    scaler = jmp.NoOpLossScale()
-
-optim = opax.chain(
-    opax.clip_by_global_norm(1.0),
-    opax.scale_by_adam(),
-    opax.scale(LR),
-).init(net.parameters())
-
-data_loader = make_data_loader(BATCH_SIZE, "train")
-test_data_loader = make_data_loader(BATCH_SIZE, "test")
-
-
-last_step = -1
-files = sorted(Path("./ckpts").glob(f"{MODEL_PREFIX}_*.ckpt"))
-if len(files) > 0:
-    print("loading", files[-1])
-    last_step, net, optim = load_ckpt(net, optim, files[-1])
-
-
-step = last_step
-losses = []
-start = time.perf_counter()
-start_epoch = (last_step + 1) // len(data_loader)
-for epoch in range(start_epoch, 10000):
-    losses = []
-    data_iter = double_buffer(data_loader.as_numpy_iterator())
-    for batch in data_iter:
-        batch = prepare_train_batch(batch)
-        step = step + 1
-        last_step = step
-        net, optim, scaler, loss = train_step(net, optim, scaler, batch)
-        losses.append(loss)
-    test_loss = eval_score(net, test_data_loader)
-    loss = sum(losses) / len(losses)
-    end = time.perf_counter()
-    duration = end - start
-    start = end
-    print(
-        "step {:07d}  epoch {:05d}  loss {:.3f}  test loss {:.3f}  gradscale {:.0f}  {:.2f}s".format(
-            step, epoch, loss, test_loss, scaler.loss_scale, duration
-        )
+    net = Tacotron(
+        mel_dim=MEL_DIM,
+        attn_bias=ATTN_BIAS,
+        rr=RR,
+        max_rr=MAX_RR,
+        mel_min=MEL_MIN,
+        sigmoid_noise=SIGMOID_NOISE,
     )
-    if epoch % 5 == 0:
-        save_ckpt(step, net, optim)
-        plot_attn(step, net.attn_log)
-        eval_inference(step, net, test_data_loader)
+
+    if USE_MP:
+        scaler = jmp.DynamicLossScale(jnp.array(2**15, dtype=jnp.float32))
+        net = net.apply(pax.experimental.default_mp_policy)
+    else:
+        scaler = jmp.NoOpLossScale()
+
+    optim = opax.chain(
+        opax.clip_by_global_norm(1.0),
+        opax.scale_by_adam(),
+        opax.scale(lr),
+    ).init(net.parameters())
+
+    data_loader = make_data_loader(batch_size, "train")
+    test_data_loader = make_data_loader(batch_size, "test")
+
+    last_step = -1
+    files = sorted(CKPT_DIR.glob(f"{MODEL_PREFIX}_*.ckpt"))
+    if len(files) > 0:
+        print("loading", files[-1])
+        last_step, net, optim = load_ckpt(net, optim, files[-1])
+
+    step = last_step
+    losses = []
+    start = time.perf_counter()
+    start_epoch = (last_step + 1) // len(data_loader)
+    for epoch in range(start_epoch, 10000):
+        losses = []
+        data_iter = double_buffer(data_loader.as_numpy_iterator())
+        for batch in data_iter:
+            batch = prepare_train_batch(batch)
+            step = step + 1
+            last_step = step
+            net, optim, scaler, loss = train_step(net, optim, scaler, batch)
+            losses.append(loss)
+        test_loss = eval_score(net, test_data_loader)
+        loss = sum(losses) / len(losses)
+        end = time.perf_counter()
+        duration = end - start
+        start = end
+        print(
+            "step {:07d}  epoch {:05d}  loss {:.3f}  test loss {:.3f}  gradscale {:.0f}  {:.2f}s".format(
+                step, epoch, loss, test_loss, scaler.loss_scale, duration
+            )
+        )
+
+        if epoch % 10 == 0:
+            save_ckpt(CKPT_DIR, MODEL_PREFIX, step, net, optim)
+            plot_attn(step, net.attn_log)
+            eval_inference(step, net, test_data_loader)
+
+
+if __name__ == "__main__":
+    fire.Fire(train)

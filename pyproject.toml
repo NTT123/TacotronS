@@ -18,6 +18,7 @@ matplotlib = "^3.5.1"
 librosa = "^0.9.1"
 tqdm = "^4.62.3"
 pooch = "^1.6.0"
+fire = "^0.4.0"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
@@ -28,6 +29,7 @@ BATCH_SIZE = 64
 LR=1e-3 # learning rate
 MODEL_PREFIX = "mono_tts"
 LOG_DIR = "./logs"
+CKPT_DIR = "./ckpts"
 TF_DATA_DIR = "./tf_data" # tensorflow data directory
 SAMPLE_RATE = 22050 # convert to this sample rate if needed
 MEL_DIM = 80 # the dimension of melspectrogram features
