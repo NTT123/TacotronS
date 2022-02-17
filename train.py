@@ -138,7 +138,7 @@ def eval_score(net: Tacotron, data_loader):
     evaluate the model on the test set
     """
     losses = []
-    net = net.eval()
+    net = net.train()
     data_iter = double_buffer(data_loader.as_numpy_iterator())
     for batch in data_iter:
         batch = prepare_train_batch(batch, random_start=False)
@@ -168,7 +168,8 @@ def eval_inference(step, net, batch):
     test_text = test_text[:1]
     test_mel = test_mel[:1]
     inference_fn = pax.pure(lambda net, text: net.inference(text, max_len=400))
-    predicted_mel = inference_fn(net.eval(), test_text[:1])
+    net = net.train()  # training mode gives better results
+    predicted_mel = inference_fn(net, test_text[:1])
     fig, ax = plt.subplots(2, 1, figsize=(10, 7))
     L = predicted_mel.shape[1]
     ax[0].imshow(
@@ -219,6 +220,7 @@ def train(batch_size: int = BATCH_SIZE, lr: float = LR):
     if len(files) > 0:
         print("loading", files[-1])
         last_step, net, optim = load_ckpt(net, optim, files[-1])
+        net, optim = jax.device_put((net, optim))
 
     step = last_step
     losses = []
@@ -232,7 +234,6 @@ def train(batch_size: int = BATCH_SIZE, lr: float = LR):
         for batch in data_iter:
             batch = prepare_train_batch(batch)
             step = step + 1
-            last_step = step
             net, optim, scaler, loss = train_step(net, optim, scaler, batch)
             losses.append(loss)
         test_loss = eval_score(net, test_data_loader)

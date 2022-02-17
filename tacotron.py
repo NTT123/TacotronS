@@ -165,11 +165,8 @@ class Tacotron(pax.Module):
             new_state, _ = lstm_core(state, x)
             h_old = state.hidden
             h_new = new_state.hidden
-            if self.training:
-                mask = jax.random.bernoulli(rng_key, zoneout_pr, h_old.shape)
-                h_new = h_old * mask + h_new * (1.0 - mask)
-            else:
-                h_new = h_old * zoneout_pr + h_new * (1.0 - zoneout_pr)
+            mask = jax.random.bernoulli(rng_key, zoneout_pr, h_old.shape)
+            h_new = h_old * mask + h_new * (1.0 - mask)
             return pax.LSTMState(h_new, new_state.cell), h_new
 
         return core
@@ -185,7 +182,7 @@ class Tacotron(pax.Module):
 
         @jax.jit
         def step(attn_state, mel_rnn_states, rng_key, mel):
-            k1, k2, rng_key, rng_key_next = jax.random.split(rng_key, 4)
+            k1, k2, zk1, zk2, rng_key, rng_key_next = jax.random.split(rng_key, 6)
             mel = self.pre_net(mel, k1, k2)
             attn_inputs = (mel, rng_key)
             attn_envs = (text, text_key)
@@ -195,10 +192,10 @@ class Tacotron(pax.Module):
             (_, attn_context, _) = attn_state
             (mel_rnn_state1, mel_rnn_state2) = mel_rnn_states
             mel_rnn1_input = jax.nn.relu(attn_rnn_output + attn_context)
-            mel_rnn1 = self.zoneout_lstm(self.mel_rnn1, None)
+            mel_rnn1 = self.zoneout_lstm(self.mel_rnn1, zk1)
             mel_rnn_state1, mel_rnn_output1 = mel_rnn1(mel_rnn_state1, mel_rnn1_input)
             mel_rnn2_input = jax.nn.relu(mel_rnn1_input + mel_rnn_output1)
-            mel_rnn2 = self.zoneout_lstm(self.mel_rnn2, None)
+            mel_rnn2 = self.zoneout_lstm(self.mel_rnn2, zk2)
             mel_rnn_state2, mel_rnn_output2 = mel_rnn2(mel_rnn_state2, mel_rnn2_input)
             x = jax.nn.relu(mel_rnn1_input + mel_rnn_output1 + mel_rnn_output2)
             x = self.output_fc(x)
