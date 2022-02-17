@@ -100,7 +100,7 @@ def loss_fn(net: Tacotron, batch, scaler=None):
     """
     text, mel = batch
     mel = mel.astype(jnp.float32)
-    go_frame = net.go_frame(mel.shape[0])
+    go_frame = net.go_frame(mel.shape[0])[:, None, :]
     input_mel = mel[:, (RR - 1) :: RR][:, :-1]
     input_mel = jnp.concatenate((go_frame, input_mel), axis=1)
     mel_mask = mel > jnp.log(MEL_MIN) + 1e-5
@@ -160,13 +160,11 @@ def plot_attn(step, attn_weight):
     plt.close()
 
 
-def eval_inference(step, net, test_data_loader):
+def eval_inference(step, net, batch):
     """
     evaluate inference mode
     """
-    test_batch = next(iter(test_data_loader.as_numpy_iterator()))
-    test_batch = prepare_train_batch(test_batch)
-    test_text, test_mel = test_batch
+    test_text, test_mel = batch
     test_text = test_text[:1]
     test_mel = test_mel[:1]
     inference_fn = pax.pure(lambda net, text: net.inference(text, max_len=400))
@@ -226,6 +224,8 @@ def train(batch_size: int = BATCH_SIZE, lr: float = LR):
     losses = []
     start = time.perf_counter()
     start_epoch = (last_step + 1) // len(data_loader)
+    test_batch = next(iter(test_data_loader.as_numpy_iterator()))
+    test_batch = prepare_train_batch(test_batch)
     for epoch in range(start_epoch, 10000):
         losses = []
         data_iter = double_buffer(data_loader.as_numpy_iterator())
@@ -249,7 +249,7 @@ def train(batch_size: int = BATCH_SIZE, lr: float = LR):
         if epoch % 10 == 0:
             save_ckpt(CKPT_DIR, MODEL_PREFIX, step, net, optim)
             plot_attn(step, net.attn_log)
-            eval_inference(step, net, test_data_loader)
+            eval_inference(step, net, test_batch)
 
 
 if __name__ == "__main__":
