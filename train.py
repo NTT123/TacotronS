@@ -12,6 +12,7 @@ import opax
 import pax
 import tensorflow as tf
 from pax.experimental import apply_scaled_gradients
+from tqdm.cli import tqdm
 
 from tacotron import Tacotron
 from utils import load_ckpt, load_config, save_ckpt
@@ -95,6 +96,16 @@ def bce_loss(logit, target):
     return -jnp.mean(llh1 + llh2)
 
 
+def l1_l2_loss(x, y):
+    """
+    compute the average of l1 and l2 losses
+    """
+    delta = x - y
+    mse = jnp.mean(jnp.square(delta))
+    mae = jnp.mean(jnp.abs(delta))
+    return (mse + mae) / 2
+
+
 def loss_fn(net: Tacotron, batch, scaler=None):
     """
     training loss function
@@ -104,17 +115,16 @@ def loss_fn(net: Tacotron, batch, scaler=None):
     go_frame = net.go_frame(mel.shape[0])[:, None, :]
     input_mel = mel[:, (RR - 1) :: RR][:, :-1]
     input_mel = jnp.concatenate((go_frame, input_mel), axis=1)
-    mel_mask = mel > jnp.log(MEL_MIN) + 1e-5
     stop_token = mel[..., 0] <= jnp.log(MEL_MIN) + 1e-5
-    net, (predicted_mel, predicted_eos) = pax.purecall(net, input_mel, text)
-    delta = (mel - predicted_mel) * mel_mask
-    loss1 = jnp.mean(jnp.square(delta))
-    loss2 = jnp.mean(jnp.abs(delta))
+    net, predictions = pax.purecall(net, input_mel, text)
+    (predicted_mel, predicted_mel_postnet, predicted_eos) = predictions
+
     eos_loss = bce_loss(predicted_eos, stop_token)
-    loss = (loss1 + loss2) / 2 + eos_loss * 1e-2
-    if scaler is None:
-        scaler = jmp.NoOpLossScale()
-    loss = scaler.scale(loss)
+    post_net_loss = l1_l2_loss(predicted_mel_postnet, mel)
+    loss = l1_l2_loss(predicted_mel, mel) + post_net_loss
+    loss = loss / 2 + eos_loss * 1e-2
+    if scaler is not None:
+        loss = scaler.scale(loss)
     return loss, net
 
 
@@ -139,7 +149,7 @@ def eval_score(net: Tacotron, data_loader):
     evaluate the model on the test set
     """
     losses = []
-    net = net.train()
+    net = net.eval()
     data_iter = double_buffer(data_loader.as_numpy_iterator())
     for batch in data_iter:
         batch = prepare_train_batch(batch, random_start=False)
@@ -161,7 +171,7 @@ def plot_attn(step, attn_weight):
     plt.close()
 
 
-def eval_inference(step, net, batch):
+def eval_inference(step: int, net: Tacotron, batch):
     """
     evaluate inference mode
     """
@@ -169,9 +179,10 @@ def eval_inference(step, net, batch):
     test_text = test_text[:1]
     test_mel = test_mel[:1]
     inference_fn = pax.pure(lambda net, text: net.inference(text, max_len=400))
-    net = net.train()  # training mode gives better results
+    net = net.eval()
     predicted_mel = inference_fn(net, test_text[:1])
     fig, ax = plt.subplots(2, 1, figsize=(10, 7))
+    del fig
     L = predicted_mel.shape[1]
     ax[0].imshow(
         test_mel[0, :L].T.astype(jnp.float32), origin="lower", interpolation="nearest"
@@ -233,7 +244,9 @@ def train(batch_size: int = BATCH_SIZE, lr: float = LR):
     for epoch in range(start_epoch, 10000):
         losses = []
         data_iter = double_buffer(data_loader.as_numpy_iterator())
-        for batch in data_iter:
+        for batch in tqdm(
+            data_iter, total=len(data_loader), leave=False, desc=f"epoch {epoch}"
+        ):
             batch = prepare_train_batch(batch)
             step = step + 1
             net, optim, scaler, loss = train_step(net, optim, scaler, batch)

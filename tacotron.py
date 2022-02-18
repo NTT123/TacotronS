@@ -3,6 +3,17 @@ import jax.numpy as jnp
 import pax
 
 
+def conv_block(in_ft, out_ft, kernel_size, activation_fn, use_dropout):
+    """conv + batchnorm + activation + dropout"""
+    return pax.Sequential(
+        pax.Conv1D(in_ft, out_ft, kernel_size, padding="SAME"),
+        pax.BatchNorm1D(out_ft, True, True, 0.99),
+        activation_fn if activation_fn is not None else pax.Identity(),
+        pax.Dropout(0.5) if use_dropout else pax.Identity(),
+        name="conv_block",
+    )
+
+
 class Tacotron(pax.Module):
     """
     Tacotron TTS model.
@@ -11,14 +22,21 @@ class Tacotron(pax.Module):
     """
 
     def __init__(
-        self, mel_dim: int, attn_bias, rr, max_rr, mel_min, sigmoid_noise, pad_token
+        self,
+        mel_dim: int,
+        attn_bias,
+        rr,
+        max_rr,
+        mel_min,
+        sigmoid_noise,
+        pad_token,
+        prenet_dim=256,
+        attn_hidden_dim=128,
+        rnn_dim=512,
+        postnet_dim=512,
     ):
         super().__init__()
-        attn_hidden_dim = 128
-        prenet_dim = 256
-        rnn_dim = 512
         text_dim = rnn_dim
-
         self.text_dim = text_dim
         self.rr = rr
         self.max_rr = max_rr
@@ -30,18 +48,9 @@ class Tacotron(pax.Module):
         # encoder submodules
         self.encoder_embed = pax.Embed(256, text_dim)
 
-        def conv_block():
-            return pax.Sequential(
-                pax.Conv1D(text_dim, text_dim, 5, padding="SAME"),
-                pax.BatchNorm1D(text_dim, True, True, 0.99),
-                jax.nn.relu,
-                pax.Dropout(0.5),
-                name="conv_block",
-            )
-
-        self.encoder_conv1 = conv_block()
-        self.encoder_conv2 = conv_block()
-        self.encoder_conv3 = conv_block()
+        self.encoder_conv1 = conv_block(text_dim, text_dim, 5, jax.nn.relu, True)
+        self.encoder_conv2 = conv_block(text_dim, text_dim, 5, jax.nn.relu, True)
+        self.encoder_conv3 = conv_block(text_dim, text_dim, 5, jax.nn.relu, True)
 
         self.encoder_gru_fwd = pax.GRU(text_dim, text_dim // 2)
         self.encoder_gru_bwd = pax.GRU(text_dim, text_dim // 2)
@@ -64,10 +73,19 @@ class Tacotron(pax.Module):
         self.attn_score_bias = jnp.array(attn_bias)
         self.attn_log = jnp.zeros((1,))
 
-        self.mel_rnn1 = pax.LSTM(rnn_dim, rnn_dim)
-        self.mel_rnn2 = pax.LSTM(rnn_dim, rnn_dim)
+        self.decoder_rnn1 = pax.LSTM(rnn_dim, rnn_dim)
+        self.decoder_rnn2 = pax.LSTM(rnn_dim, rnn_dim)
         # mel + end-of-sequence token
         self.output_fc = pax.Linear(rnn_dim, (mel_dim + 1) * max_rr)
+
+        # post-net
+        self.post_net = pax.Sequential(
+            conv_block(mel_dim, postnet_dim, 5, jax.nn.tanh, True),
+            conv_block(postnet_dim, postnet_dim, 5, jax.nn.tanh, True),
+            conv_block(postnet_dim, postnet_dim, 5, jax.nn.tanh, True),
+            conv_block(postnet_dim, postnet_dim, 5, jax.nn.tanh, True),
+            conv_block(postnet_dim, mel_dim, 5, None, True),
+        )
 
     parameters = pax.parameters_method(
         "attn_score_weight", "attn_score_weight_norm", "attn_score_bias"
@@ -145,11 +163,11 @@ class Tacotron(pax.Module):
         )
 
         attn_state = (self.attn_rnn.initial_state(N), attn_context, attn_pr)
-        mel_rnn_states = (
-            self.mel_rnn1.initial_state(N),
-            self.mel_rnn2.initial_state(N),
+        decoder_rnn_states = (
+            self.decoder_rnn1.initial_state(N),
+            self.decoder_rnn2.initial_state(N),
         )
-        return attn_state, mel_rnn_states
+        return attn_state, decoder_rnn_states
 
     def monotonic_attention(self, prev_state, inputs, envs):
         """
@@ -206,7 +224,7 @@ class Tacotron(pax.Module):
         mel = self.go_frame(N)
 
         @jax.jit
-        def step(attn_state, mel_rnn_states, rng_key, mel):
+        def step(attn_state, decoder_rnn_states, rng_key, mel):
             k1, k2, zk1, zk2, rng_key, rng_key_next = jax.random.split(rng_key, 6)
             mel = self.pre_net(mel, k1, k2)
             attn_inputs = (mel, rng_key)
@@ -215,14 +233,20 @@ class Tacotron(pax.Module):
                 attn_state, attn_inputs, attn_envs
             )
             (_, attn_context, _) = attn_state
-            (mel_rnn_state1, mel_rnn_state2) = mel_rnn_states
-            mel_rnn1_input = jax.nn.relu(attn_rnn_output + attn_context)
-            mel_rnn1 = self.zoneout_lstm(self.mel_rnn1, zk1)
-            mel_rnn_state1, mel_rnn_output1 = mel_rnn1(mel_rnn_state1, mel_rnn1_input)
-            mel_rnn2_input = jax.nn.relu(mel_rnn1_input + mel_rnn_output1)
-            mel_rnn2 = self.zoneout_lstm(self.mel_rnn2, zk2)
-            mel_rnn_state2, mel_rnn_output2 = mel_rnn2(mel_rnn_state2, mel_rnn2_input)
-            x = jax.nn.relu(mel_rnn1_input + mel_rnn_output1 + mel_rnn_output2)
+            (decoder_rnn_state1, decoder_rnn_state2) = decoder_rnn_states
+            decoder_rnn1_input = jax.nn.relu(attn_rnn_output + attn_context)
+            decoder_rnn1 = self.zoneout_lstm(self.decoder_rnn1, zk1)
+            decoder_rnn_state1, decoder_rnn_output1 = decoder_rnn1(
+                decoder_rnn_state1, decoder_rnn1_input
+            )
+            decoder_rnn2_input = jax.nn.relu(decoder_rnn1_input + decoder_rnn_output1)
+            decoder_rnn2 = self.zoneout_lstm(self.decoder_rnn2, zk2)
+            decoder_rnn_state2, decoder_rnn_output2 = decoder_rnn2(
+                decoder_rnn_state2, decoder_rnn2_input
+            )
+            x = jax.nn.relu(
+                decoder_rnn1_input + decoder_rnn_output1 + decoder_rnn_output2
+            )
             x = self.output_fc(x)
             N, D2 = x.shape
             x = jnp.reshape(x, (N, self.max_rr, D2 // self.max_rr))
@@ -230,17 +254,17 @@ class Tacotron(pax.Module):
             x = jnp.reshape(x, (N, self.rr, -1))
             mel = x[..., :-1]
             eos = x[..., -1]
-            mel_rnn_states = (mel_rnn_state1, mel_rnn_state2)
-            return attn_state, mel_rnn_states, rng_key_next, (mel, eos)
+            decoder_rnn_states = (decoder_rnn_state1, decoder_rnn_state2)
+            return attn_state, decoder_rnn_states, rng_key_next, (mel, eos)
 
-        attn_state, mel_rnn_states = self.decoder_initial_state(N, L)
+        attn_state, decoder_rnn_states = self.decoder_initial_state(N, L)
         rng_key = jax.random.PRNGKey(seed)
         mels = []
         count = 0
         while True:
             count = count + 1
-            attn_state, mel_rnn_states, rng_key, (mel, eos) = step(
-                attn_state, mel_rnn_states, rng_key, mel
+            attn_state, decoder_rnn_states, rng_key, (mel, eos) = step(
+                attn_state, decoder_rnn_states, rng_key, mel
             )
             mels.append(mel)
             if eos[0, -1].item() > 0 or count > max_len:
@@ -249,6 +273,7 @@ class Tacotron(pax.Module):
             mel = mel[:, -1, :]
 
         mels = jnp.concatenate(mels, axis=1)
+        mel = mel + self.post_net(mel)
         return mels
 
     def decode(self, mel, text):
@@ -258,8 +283,8 @@ class Tacotron(pax.Module):
         text_key = self.text_key_fc(text)
 
         def decode_loop(prev_states, inputs):
-            attn_state, mel_rnn_states = prev_states
-            mel_rnn_state1, mel_rnn_state2 = mel_rnn_states
+            attn_state, decoder_rnn_states = prev_states
+            decoder_rnn_state1, decoder_rnn_state2 = decoder_rnn_states
             x, attn_rng_key, zoneout_rng_key = inputs
 
             attn_input = (x, attn_rng_key[0])
@@ -270,18 +295,24 @@ class Tacotron(pax.Module):
             )
             (_, attn_context, attn_pr) = attn_state
 
-            ## decode
-            mel_rnn1_input = jax.nn.relu(attn_rnn_output + attn_context)
+            # decode
+            decoder_rnn1_input = jax.nn.relu(attn_rnn_output + attn_context)
             zoneout_rng_key = zoneout_rng_key[0]
-            mel_rnn1 = self.zoneout_lstm(self.mel_rnn1, zoneout_rng_key[0])
-            mel_rnn_state1, mel_rnn_output1 = mel_rnn1(mel_rnn_state1, mel_rnn1_input)
-            mel_rnn2_input = jax.nn.relu(mel_rnn1_input + mel_rnn_output1)
-            mel_rnn2 = self.zoneout_lstm(self.mel_rnn2, zoneout_rng_key[1])
-            mel_rnn_state2, mel_rnn_output2 = mel_rnn2(mel_rnn_state2, mel_rnn2_input)
+            decoder_rnn1 = self.zoneout_lstm(self.decoder_rnn1, zoneout_rng_key[0])
+            decoder_rnn_state1, decoder_rnn_output1 = decoder_rnn1(
+                decoder_rnn_state1, decoder_rnn1_input
+            )
+            decoder_rnn2_input = jax.nn.relu(decoder_rnn1_input + decoder_rnn_output1)
+            decoder_rnn2 = self.zoneout_lstm(self.decoder_rnn2, zoneout_rng_key[1])
+            decoder_rnn_state2, decoder_rnn_output2 = decoder_rnn2(
+                decoder_rnn_state2, decoder_rnn2_input
+            )
 
-            output = jax.nn.relu(mel_rnn1_input + mel_rnn_output1 + mel_rnn_output2)
-            mel_rnn_states = (mel_rnn_state1, mel_rnn_state2)
-            states = (attn_state, mel_rnn_states)
+            output = jax.nn.relu(
+                decoder_rnn1_input + decoder_rnn_output1 + decoder_rnn_output2
+            )
+            decoder_rnn_states = (decoder_rnn_state1, decoder_rnn_state2)
+            states = (attn_state, decoder_rnn_states)
             return states, (output, attn_pr[0])
 
         N, L, D = text.shape
@@ -312,4 +343,5 @@ class Tacotron(pax.Module):
     def __call__(self, mel: jnp.ndarray, text: jnp.ndarray):
         text = self.encode_text(text)
         mel = self.pre_net(mel)
-        return self.decode(mel, text)
+        mel, eos = self.decode(mel, text)
+        return mel, mel + self.post_net(mel), eos
