@@ -19,6 +19,7 @@ SAMPLE_RATE = config["SAMPLE_RATE"]
 MEL_DIM = config["MEL_DIM"]
 MEL_MIN = config["MEL_MIN"]
 PAD_TOKEN = config["PAD_TOKEN"]
+PAD = config["PAD"]
 TF_DATA_DIR = Path(config["TF_DATA_DIR"])
 
 
@@ -63,7 +64,7 @@ def get_transcripts(wav_files):
         txt_path = file_path.with_suffix(".txt")
         with open(txt_path, "r", encoding="utf-8") as f:
             text = f.read().strip()
-            assert "_" not in text
+            assert PAD not in text
             texts.append(text)
     return texts
 
@@ -72,10 +73,10 @@ def get_alphabet(wav_files):
     """
     Return a list of all characters in the transcripts.
 
-    The padding character "_" is also included.
+    The padding character is also included.
     """
     texts = get_transcripts(wav_files)
-    alphabet = ["_"] + sorted(set("".join(texts)))
+    alphabet = [PAD] + sorted(set("".join(texts)))
     return alphabet
 
 
@@ -95,9 +96,9 @@ def create_tf_data(data_dir: Path, output_dir: Path):
     wav_files = get_wav_files(data_dir)
     texts = get_transcripts(wav_files)
     maxlen = max(map(len, texts))
-    padded_texts = [l + "_" * (maxlen - len(l)) for l in texts]
+    padded_texts = [l + PAD * (maxlen - len(l)) for l in texts]
     alphabet = get_alphabet(wav_files)
-    assert PAD_TOKEN == alphabet.index("_")
+    assert PAD_TOKEN == alphabet.index(PAD)
     text_tokens = []
     for text in tqdm(padded_texts):
         o = []

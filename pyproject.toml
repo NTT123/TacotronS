@@ -26,7 +26,7 @@ build-backend = "poetry.core.masonry.api"
 
 [tacotron]
 BATCH_SIZE = 64
-LR=1e-3 # learning rate
+LR=1024e-6 # learning rate
 MODEL_PREFIX = "mono_tts"
 LOG_DIR = "./logs"
 CKPT_DIR = "./ckpts"
@@ -34,10 +34,11 @@ TF_DATA_DIR = "./tf_data" # tensorflow data directory
 SAMPLE_RATE = 22050 # convert to this sample rate if needed
 MEL_DIM = 80 # the dimension of melspectrogram features
 MEL_MIN = 1e-5
+PAD = "_" # padding character
 PAD_TOKEN = 0
 RR = 2 # reduction factor
 MAX_RR=2
-ATTN_BIAS = 1.5 # control how fast the attention will move forward
+ATTN_BIAS = 0.0 # control how slow the attention moves forward
 SIGMOID_NOISE = 2.0
 TEST_DATA_SIZE = 1024
 USE_MP = false  # use mixed-precision training

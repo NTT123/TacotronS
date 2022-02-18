@@ -26,11 +26,10 @@ with open(args.alphabet_file, "r", encoding="utf-8") as f:
 text = english_cleaners(args.text)
 print("Input: ", text)
 
-text = text + "_" * 20
+config = load_config()
+text = text + config["PAD"] * 20
 tokens = [alphabet.index(c) for c in text]
 print("Tokens:", tokens)
-
-config = load_config()
 
 net = Tacotron(
     mel_dim=config["MEL_DIM"],
