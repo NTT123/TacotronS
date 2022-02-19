@@ -20,7 +20,7 @@ if "COLAB_TPU_ADDR" in os.environ:
     jax.tools.colab_tpu.setup_tpu()
 DEVICES = jax.devices()
 NUM_DEVICES = len(DEVICES)
-STEPS_PER_CALL = 20
+STEPS_PER_CALL = 10
 print("Devices:", DEVICES)
 
 config = load_config()

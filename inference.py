@@ -41,9 +41,9 @@ net = Tacotron(
 )
 
 _, net, _ = load_ckpt(net, None, args.model)
-net = net.eval()
+net = net.train().replace(post_net=net.post_net.eval())
 net = jax.device_put(net)
-inference_fn = pax.pure(lambda net, text: net.inference(text, max_len=1000))
+inference_fn = pax.pure(lambda net, text: net.inference(text, max_len=10000))
 tokens = jnp.array(tokens, dtype=jnp.int32)
 mel = inference_fn(net, tokens[None])
 mel = jax.device_get(mel)
