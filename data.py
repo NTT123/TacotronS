@@ -2,7 +2,6 @@
 Create tensorflow dataset
 """
 
-import os
 import random
 from argparse import ArgumentParser
 from pathlib import Path

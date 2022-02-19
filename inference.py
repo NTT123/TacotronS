@@ -1,4 +1,3 @@
-import pickle
 from argparse import ArgumentParser
 from pathlib import Path
 
@@ -27,7 +26,7 @@ text = english_cleaners(args.text)
 print("Input: ", text)
 
 config = load_config()
-text = text + config["PAD"] * 20
+text = text + config["PAD"] * 10
 tokens = [alphabet.index(c) for c in text]
 print("Tokens:", tokens)
 
