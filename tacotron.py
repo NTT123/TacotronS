@@ -10,7 +10,7 @@ import pax
 def conv_block(in_ft, out_ft, kernel_size, activation_fn, use_dropout):
     """conv + batchnorm + activation + dropout"""
     return pax.Sequential(
-        pax.Conv1D(in_ft, out_ft, kernel_size, padding="SAME", with_bias=False),
+        pax.Conv1D(in_ft, out_ft, kernel_size, padding="SAME", with_bias=True),
         pax.BatchNorm1D(out_ft, True, True, 0.99),
         activation_fn if activation_fn is not None else pax.Identity(),
         pax.Dropout(0.5) if use_dropout else pax.Identity(),
@@ -61,8 +61,8 @@ class Tacotron(pax.Module):
 
         # pre-net
         self.pre_net_rng = pax.RngSeq()
-        self.pre_net_fc1 = pax.Linear(mel_dim, prenet_dim, with_bias=False)
-        self.pre_net_fc2 = pax.Linear(prenet_dim, prenet_dim, with_bias=False)
+        self.pre_net_fc1 = pax.Linear(mel_dim, prenet_dim, with_bias=True)
+        self.pre_net_fc2 = pax.Linear(prenet_dim, prenet_dim, with_bias=True)
 
         # decoder submodules
         self.attn_rnn = pax.LSTM(prenet_dim + text_dim, rnn_dim)
@@ -80,7 +80,7 @@ class Tacotron(pax.Module):
         self.decoder_rnn1 = pax.LSTM(rnn_dim, rnn_dim)
         self.decoder_rnn2 = pax.LSTM(rnn_dim, rnn_dim)
         # mel + end-of-sequence token
-        self.output_fc = pax.Linear(rnn_dim, (mel_dim + 1) * max_rr, with_bias=False)
+        self.output_fc = pax.Linear(rnn_dim, (mel_dim + 1) * max_rr, with_bias=True)
 
         # post-net
         self.post_net = pax.Sequential(
