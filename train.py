@@ -1,7 +1,6 @@
 import random
 import time
 from pathlib import Path
-from typing import Tuple
 
 import fire
 import jax
@@ -133,9 +132,7 @@ fast_loss_fn = jax.jit(loss_fn)
 
 
 @jax.jit
-def train_step(
-    net: Tacotron, optim: pax.Module, scaler, batch
-) -> Tuple[Tacotron, pax.Module, jmp.DynamicLossScale, jnp.ndarray]:
+def train_step(net: Tacotron, optim: pax.Module, scaler, batch):
     """
     one training step
     """

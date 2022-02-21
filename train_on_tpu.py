@@ -293,8 +293,6 @@ def train(batch_size: int = BATCH_SIZE, lr: float = LR):
         if (step // STEPS_PER_CALL) % log_interval == 0:
             loss = jnp.mean(loss_sum).item() / log_interval
             loss_sum = 0.0
-            plot_attn(step, net.attn_log[0])
-            plot_prediction(step, net, test_batch)
             end = time.perf_counter()
             duration = end - start
             start = end
@@ -305,6 +303,8 @@ def train(batch_size: int = BATCH_SIZE, lr: float = LR):
         if step % 10_000 == 0:
             net_, optim_ = jax.tree_map(lambda x: x[0], (net, optim))
             save_ckpt(CKPT_DIR, MODEL_PREFIX, step, net_, optim_)
+            plot_attn(step, net.attn_log[0])
+            plot_prediction(step, net, test_batch)
 
 
 if __name__ == "__main__":

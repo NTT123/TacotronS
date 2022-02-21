@@ -10,7 +10,7 @@ import pax
 def conv_block(in_ft, out_ft, kernel_size, activation_fn, use_dropout):
     """conv >> batchnorm >> activation >> dropout"""
     return pax.Sequential(
-        pax.Conv1D(in_ft, out_ft, kernel_size, padding="SAME", with_bias=True),
+        pax.Conv1D(in_ft, out_ft, kernel_size, padding="SAME", with_bias=False),
         pax.BatchNorm1D(out_ft, True, True, 0.99),
         activation_fn if activation_fn is not None else pax.Identity(),
         pax.Dropout(0.5) if use_dropout else pax.Identity(),
@@ -59,14 +59,15 @@ class Tacotron(pax.Module):
         self.encoder_rnn_fwd = pax.LSTM(text_dim, text_dim // 2)
         self.encoder_rnn_bwd = pax.LSTM(text_dim, text_dim // 2)
 
+        # random key generator
+        self.rng_seq = pax.RngSeq()
+
         # pre-net
-        self.pre_net_rng = pax.RngSeq()
         self.pre_net_fc1 = pax.Linear(mel_dim, prenet_dim, with_bias=True)
         self.pre_net_fc2 = pax.Linear(prenet_dim, prenet_dim, with_bias=True)
 
         # decoder submodules
         self.attn_rnn = pax.LSTM(prenet_dim + text_dim, rnn_dim)
-        self.attn_rng = pax.RngSeq()
         self.text_key_fc = pax.Linear(text_dim, attn_hidden_dim, with_bias=True)
         self.attn_query_fc = pax.Linear(rnn_dim, attn_hidden_dim, with_bias=False)
 
@@ -142,12 +143,12 @@ class Tacotron(pax.Module):
         x = self.pre_net_fc1(mel)
         x = jax.nn.relu(x)
         if rng_key1 is None:
-            rng_key1 = self.pre_net_rng.next_rng_key()
+            rng_key1 = self.rng_seq.next_rng_key()
         x = pax.dropout(rng_key1, 0.5, x)
         x = self.pre_net_fc2(x)
         x = jax.nn.relu(x)
         if rng_key2 is None:
-            rng_key2 = self.pre_net_rng.next_rng_key()
+            rng_key2 = self.rng_seq.next_rng_key()
         x = pax.dropout(rng_key2, 0.5, x)
         return x
 
@@ -318,9 +319,9 @@ class Tacotron(pax.Module):
 
         N, L, D = text.shape
         decoder_states = self.decoder_initial_state(N, L)
-        attn_rng_keys = self.attn_rng.next_rng_key(mel.shape[1])
+        attn_rng_keys = self.rng_seq.next_rng_key(mel.shape[1])
         attn_rng_keys = jnp.stack(attn_rng_keys)[None]
-        zoneout_rng_keys = self.attn_rng.next_rng_key(mel.shape[1] * 2)
+        zoneout_rng_keys = self.rng_seq.next_rng_key(mel.shape[1] * 2)
         zoneout_rng_keys = jnp.stack(zoneout_rng_keys)[None]
         zoneout_rng_keys = zoneout_rng_keys.reshape((1, mel.shape[1], 2, -1))
         decoder_states, (x, attn_log) = pax.scan(
