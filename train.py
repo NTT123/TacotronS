@@ -96,14 +96,12 @@ def bce_loss(logit, target):
     return -jnp.mean(llh1 + llh2)
 
 
-def l1_l2_loss(x, y):
+def l1_loss(x, y):
     """
-    compute the average of l1 and l2 losses
+    compute the l1 loss
     """
     delta = x - y
-    mse = jnp.mean(jnp.square(delta), axis=-1)
-    mae = jnp.mean(jnp.abs(delta), axis=-1)
-    return (mse + mae) / 2
+    return jnp.mean(jnp.abs(delta), axis=-1)
 
 
 def loss_fn(net: Tacotron, batch, scaler=None):
@@ -120,8 +118,8 @@ def loss_fn(net: Tacotron, batch, scaler=None):
     (predicted_mel, predicted_mel_postnet, predicted_eos) = predictions
 
     eos_loss = bce_loss(predicted_eos, stop_token)
-    post_net_loss = l1_l2_loss(predicted_mel_postnet, mel)
-    loss = (l1_l2_loss(predicted_mel, mel) + post_net_loss) / 2
+    post_net_loss = l1_loss(predicted_mel_postnet, mel)
+    loss = (l1_loss(predicted_mel, mel) + post_net_loss) / 2
     mel_mask = mel[..., 0] > jnp.log(MEL_MIN) + 1e-5
     # per-frame mel loss
     loss = jnp.sum(loss * mel_mask) / jnp.sum(mel_mask)

@@ -8,6 +8,7 @@ import fire
 import jax
 import jax.numpy as jnp
 import jax.tools.colab_tpu
+import matplotlib.pyplot as plt
 import opax
 import pax
 import tensorflow as tf
@@ -88,14 +89,12 @@ def bce_loss(logit, target):
     return -jnp.mean(llh1 + llh2)
 
 
-def l1_l2_loss(x, y):
+def l1_loss(x, y):
     """
-    compute the average of l1 and l2 losses
+    compute the l1 loss
     """
     delta = x - y
-    mse = jnp.mean(jnp.square(delta), axis=-1)
-    mae = jnp.mean(jnp.abs(delta), axis=-1)
-    return (mse + mae) / 2
+    return jnp.mean(jnp.abs(delta), axis=-1)
 
 
 def loss_fn(net: Tacotron, batch, scaler=None):
@@ -112,8 +111,8 @@ def loss_fn(net: Tacotron, batch, scaler=None):
     (predicted_mel, predicted_mel_postnet, predicted_eos) = predictions
 
     eos_loss = bce_loss(predicted_eos, stop_token)
-    post_net_loss = l1_l2_loss(predicted_mel_postnet, mel)
-    loss = (l1_l2_loss(predicted_mel, mel) + post_net_loss) / 2
+    post_net_loss = l1_loss(predicted_mel_postnet, mel)
+    loss = (l1_loss(predicted_mel, mel) + post_net_loss) / 2
     mel_mask = mel[..., 0] > jnp.log(MEL_MIN) + 1e-5
     # per-frame mel loss
     loss = jnp.sum(loss * mel_mask) / jnp.sum(mel_mask)
@@ -189,6 +188,48 @@ def train_multiple_step(net, optim, batch):
     return net, optim, loss
 
 
+@jax.jit
+def gta_prediction(net, batch):
+    """
+    GTA prediction
+    """
+    net = net.eval()
+    text, mel = batch
+    go_frame = net.go_frame(mel.shape[0])[:, None, :]
+    input_mel = mel[:, (RR - 1) :: RR][:, :-1]
+    input_mel = jnp.concatenate((go_frame, input_mel), axis=1)
+    net, predictions = pax.purecall(net, input_mel, text)
+    (_, predicted_mel_postnet, _) = predictions
+    return mel, predicted_mel_postnet
+
+
+def plot_attn(step, attn_weight):
+    """
+    plot attention weights
+    """
+    plt.figure(figsize=(15, 5))
+    plt.matshow(
+        jax.device_get(attn_weight), fignum=0, aspect="auto", interpolation="nearest"
+    )
+    plt.savefig(LOG_DIR / f"{MODEL_PREFIX}_attn_{step:07d}.png")
+    plt.close()
+
+
+def plot_prediction(step, net, batch):
+    """
+    plot mel prediction
+    """
+    eval_net = jax.tree_map(lambda x: x[0], net.eval())
+    gt_mel, predicted_mel = gta_prediction(eval_net, batch)
+    fig, ax = plt.subplots(2, 1, figsize=(10, 6))
+    ax[0].imshow(gt_mel[0], aspect="auto", origin="lower")
+    ax[0].set_title("ground truth")
+    ax[1].imshow(predicted_mel[0], aspect="auto", origin="lower")
+    ax[1].set_title("prediction")
+    plt.savefig(LOG_DIR / f"{MODEL_PREFIX}_mels_{step:07d}.png")
+    plt.close()
+
+
 def train(batch_size: int = BATCH_SIZE, lr: float = LR):
     """
     train tacotron model
@@ -224,14 +265,16 @@ def train(batch_size: int = BATCH_SIZE, lr: float = LR):
         last_step, net, optim = load_ckpt(net, optim, files[-1])
         net, optim = jax.device_put((net, optim))
 
-    if last_step < 0:
-        # initialize attn_log
-        test_data_loader = make_data_loader(1, "test")
-        test_batch = next(iter(test_data_loader.as_numpy_iterator()))
-        test_batch = prepare_train_batch(test_batch)
-        N, L = test_batch[0].shape
-        N, T, D = test_batch[1].shape
-        net = net.replace(attn_log=jnp.zeros((L, T // RR)))
+    # initialize attn_log
+    test_data_loader = make_data_loader(1, "test")
+    test_batch = next(iter(test_data_loader.as_numpy_iterator()))
+    test_batch = prepare_train_batch(test_batch, random_start=False)
+    text, mel = test_batch
+    N, L = text.shape
+    N, T, D = mel.shape
+    net = net.replace(attn_log=jnp.zeros((L, T // RR)))
+
+    # replicate on multiple cores
     net, optim = jax.device_put_replicated((net, optim), DEVICES)
 
     step = last_step
@@ -248,6 +291,8 @@ def train(batch_size: int = BATCH_SIZE, lr: float = LR):
         if (step // STEPS_PER_CALL) % log_interval == 0:
             loss = jnp.mean(loss_sum).item() / log_interval
             loss_sum = 0.0
+            plot_attn(step, net.attn_log[0])
+            plot_prediction(step, net, test_batch)
             end = time.perf_counter()
             duration = end - start
             start = end

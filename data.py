@@ -2,15 +2,19 @@
 Create tensorflow dataset
 """
 
+import os
 import random
 from argparse import ArgumentParser
 from pathlib import Path
 
+import jax
+import jax.numpy as jnp
 import librosa
 import numpy as np
 import tensorflow as tf
 from tqdm.cli import tqdm
 
+from dsp import MelFilter
 from utils import load_config
 
 config = load_config()
@@ -20,38 +24,23 @@ MEL_MIN = config["MEL_MIN"]
 PAD_TOKEN = config["PAD_TOKEN"]
 PAD = config["PAD"]
 TF_DATA_DIR = Path(config["TF_DATA_DIR"])
-
-
-def extract_mel(wav_file):
-    """
-    Extract log-melspectrogram features from a wav file
-
-    - window size: 50 ms
-    - hop length : 12.5 ms
-
-    We use np.float16 to save memory.
-    """
-    # convert to the sample rate `SAMPLE_RATE` if needed
-    y, rate = librosa.load(wav_file, sr=SAMPLE_RATE)
-    assert rate == SAMPLE_RATE
-    hop = int(12.5 * rate / 1000)
-    window = int(50 * rate / 1000)
-    mel = librosa.feature.melspectrogram(
-        y=y,
-        sr=rate,
-        n_mels=MEL_DIM,
-        n_fft=2048,
-        hop_length=hop,
-        win_length=window,
-        window="hann",
-        center=True,
-        pad_mode="reflect",
-        power=2.0,
-        fmin=0,
-        fmax=rate // 2,
-    )
-    mel: np.ndarray = np.log(mel + MEL_MIN)
-    return mel.astype(np.float16).T
+SAMPLE_RATE = config["SAMPLE_RATE"]
+WINDOW_LENGTH = SAMPLE_RATE * 500 // 10_000  # 50.0 ms
+HOP_LENGTH = SAMPLE_RATE * 125 // 10_000  # 12.5 ms
+# Extract log-melspectrogram features from a wav file
+# - window size: 50 ms
+# - hop length : 12.5 ms
+mel_filter = MelFilter(
+    sample_rate=SAMPLE_RATE,
+    n_fft=2048,
+    window_length=WINDOW_LENGTH,
+    hop_length=HOP_LENGTH,
+    n_mels=MEL_DIM,
+    fmin=0,
+    fmax=SAMPLE_RATE // 2,
+    mel_min=MEL_MIN,
+)
+mel_filter = jax.jit(mel_filter)
 
 
 def get_transcripts(wav_files):
@@ -104,32 +93,30 @@ def create_tf_data(data_dir: Path, output_dir: Path):
         for c in text:
             o.append(alphabet.index(c))
         text_tokens.append(o)
-
-    mels = []
-    for wav_file in tqdm(wav_files):
-        mels.append(extract_mel(wav_file))
-
-    max_mel_len = max(map(len, mels))
-    pad_mels = []
-    for mel in tqdm(mels):
-        mel = np.pad(
-            mel,
-            [(0, max_mel_len - mel.shape[0]), (0, 0)],
-            constant_values=np.log(MEL_MIN),
-        )
-        pad_mels.append(mel)
-
-    del mels
+    sorted_files = sorted(wav_files, key=os.path.getsize)
+    y, _ = librosa.load(sorted_files[-1], sr=SAMPLE_RATE)
+    mel = mel_filter(y[None])[0].astype(jnp.float16)
+    mel_shape = mel.shape
+    max_wav_len = len(y)
 
     def data_generator():
-        data = list(zip(text_tokens, pad_mels))
-        for text, mel in data:
+        data = list(zip(text_tokens, wav_files))
+        random.Random(42).shuffle(data)
+        data = tqdm(data)
+        for text, wav_file in data:
+            wav, rate = librosa.load(wav_file, sr=SAMPLE_RATE)
+            assert rate == SAMPLE_RATE
+            assert max_wav_len >= len(wav)
+            pads = [(0, max_wav_len - wav.shape[0])]
+            wav = np.pad(wav, pads, constant_values=0)
+            mel = mel_filter(wav[None])[0].astype(jnp.float16)
+            mel = jax.device_get(mel)
             text = np.array(text, dtype=np.int32)
             yield text, mel
 
     output_signature = (
         tf.TensorSpec(shape=[len(text_tokens[0])], dtype=tf.int32),
-        tf.TensorSpec(shape=pad_mels[0].shape, dtype=tf.float16),
+        tf.TensorSpec(shape=mel_shape, dtype=tf.float16),
     )
     dataset = tf.data.Dataset.from_generator(
         data_generator, output_signature=output_signature
@@ -147,7 +134,7 @@ parser.add_argument("wav_dir", type=Path)
 wav_dir = parser.parse_args().wav_dir
 
 # prepare tensorflow dataset
-print(f"Loading data from the directory '{wav_dir}'")
+print(f"Loading data from directory '{wav_dir}'")
 create_tf_data(wav_dir, TF_DATA_DIR)
 
 print(

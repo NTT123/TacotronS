@@ -8,7 +8,7 @@ import pax
 
 
 def conv_block(in_ft, out_ft, kernel_size, activation_fn, use_dropout):
-    """conv + batchnorm + activation + dropout"""
+    """conv >> batchnorm >> activation >> dropout"""
     return pax.Sequential(
         pax.Conv1D(in_ft, out_ft, kernel_size, padding="SAME", with_bias=True),
         pax.BatchNorm1D(out_ft, True, True, 0.99),
@@ -56,8 +56,8 @@ class Tacotron(pax.Module):
         self.encoder_conv2 = conv_block(text_dim, text_dim, 5, jax.nn.relu, True)
         self.encoder_conv3 = conv_block(text_dim, text_dim, 5, jax.nn.relu, True)
 
-        self.encoder_gru_fwd = pax.GRU(text_dim, text_dim // 2)
-        self.encoder_gru_bwd = pax.GRU(text_dim, text_dim // 2)
+        self.encoder_rnn_fwd = pax.LSTM(text_dim, text_dim // 2)
+        self.encoder_rnn_bwd = pax.LSTM(text_dim, text_dim // 2)
 
         # pre-net
         self.pre_net_rng = pax.RngSeq()
@@ -107,28 +107,28 @@ class Tacotron(pax.Module):
         x = self.encoder_conv3(x * text_mask)
         x_fwd = x
         x_bwd = jnp.flip(x, axis=1)
-        x_fwd_states = self.encoder_gru_fwd.initial_state(N)
-        x_bwd_states = self.encoder_gru_bwd.initial_state(N)
+        x_fwd_states = self.encoder_rnn_fwd.initial_state(N)
+        x_bwd_states = self.encoder_rnn_bwd.initial_state(N)
         x_fwd_states, x_fwd = pax.scan(
-            self.encoder_gru_fwd, x_fwd_states, x_fwd, time_major=False
+            self.encoder_rnn_fwd, x_fwd_states, x_fwd, time_major=False
         )
 
         reset_masks = (text == self.pad_token)[..., None]
         reset_masks = jnp.flip(reset_masks, axis=1)
         x_bwd_states0 = x_bwd_states
 
-        def gru_reset_core(prev, inputs):
+        def rnn_reset_core(prev, inputs):
             x, reset_mask = inputs
 
             def reset_state(x0, xt):
                 return jnp.where(reset_mask, x0, xt)
 
-            state, _ = self.encoder_gru_bwd(prev, x)
+            state, _ = self.encoder_rnn_bwd(prev, x)
             state = jax.tree_map(reset_state, x_bwd_states0, state)
             return state, state.hidden
 
         x_bwd_states, x_bwd = pax.scan(
-            gru_reset_core, x_bwd_states, (x_bwd, reset_masks), time_major=False
+            rnn_reset_core, x_bwd_states, (x_bwd, reset_masks), time_major=False
         )
         x_bwd = jnp.flip(x_bwd, axis=1)
         x = jnp.concatenate((x_fwd, x_bwd), axis=-1)
