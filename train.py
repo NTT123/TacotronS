@@ -1,3 +1,4 @@
+import os
 import random
 import time
 from pathlib import Path
@@ -25,7 +26,10 @@ LR = config["LR"]
 MAX_RR = config["MAX_RR"]
 MEL_DIM = config["MEL_DIM"]
 MEL_MIN = config["MEL_MIN"]
-MODEL_PREFIX = config["MODEL_PREFIX"]
+if "MODEL_PREFIX" in os.environ:
+    MODEL_PREFIX = os.environ["MODEL_PREFIX"]
+else:
+    MODEL_PREFIX = config["MODEL_PREFIX"]
 RR = config["RR"]
 SIGMOID_NOISE = config["SIGMOID_NOISE"]
 TEST_DATA_SIZE = config["TEST_DATA_SIZE"]
