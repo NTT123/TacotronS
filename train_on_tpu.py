@@ -222,9 +222,11 @@ def plot_prediction(step, net, batch):
     eval_net = jax.tree_map(lambda x: x[0], net.eval())
     gt_mel, predicted_mel = gta_prediction(eval_net, batch)
     fig, ax = plt.subplots(2, 1, figsize=(10, 6))
-    ax[0].imshow(gt_mel[0], aspect="auto", origin="lower")
+    gt_mel = gt_mel[0].astype(jnp.float32).T
+    ax[0].imshow(gt_mel, aspect="auto", origin="lower")
     ax[0].set_title("ground truth")
-    ax[1].imshow(predicted_mel[0], aspect="auto", origin="lower")
+    predicted_mel = predicted_mel[0].astype(jnp.float32).T
+    ax[1].imshow(predicted_mel, aspect="auto", origin="lower")
     ax[1].set_title("prediction")
     plt.savefig(LOG_DIR / f"{MODEL_PREFIX}_mels_{step:07d}.png")
     plt.close()

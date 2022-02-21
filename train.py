@@ -242,6 +242,12 @@ def train(batch_size: int = BATCH_SIZE, lr: float = LR):
     start_epoch = (last_step + 1) // len(data_loader)
     test_batch = next(iter(test_data_loader.as_numpy_iterator()))
     test_batch = prepare_train_batch(test_batch)
+    # initialize attn_log
+    text, mel = test_batch
+    N, L = text.shape
+    N, T, D = mel.shape
+    net = net.replace(attn_log=jnp.zeros((L, T // RR)))
+
     for epoch in range(start_epoch, 10000):
         losses = []
         data_iter = double_buffer(data_loader.as_numpy_iterator())
