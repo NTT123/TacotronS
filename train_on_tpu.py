@@ -260,7 +260,6 @@ def train(batch_size: int = BATCH_SIZE, lr: float = LR):
         text_dim=TEXT_DIM,
         attn_rnn_dim=ATTN_RNN_DIM,
     )
-    print(net.summary())
 
     def lr_decay(step):
         e = jnp.floor(step * 1.0 / 50_000)

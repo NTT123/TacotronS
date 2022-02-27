@@ -90,7 +90,7 @@ class CBHG(pax.Module):
     def __init__(self, dim):
         super().__init__()
         self.convs = [conv_block(dim, dim, i, jax.nn.relu, False) for i in range(1, 17)]
-        self.conv_projection_1 = conv_block(dim, dim, 3, jax.nn.relu, False)
+        self.conv_projection_1 = conv_block(16 * dim, dim, 3, jax.nn.relu, False)
         self.conv_projection_2 = conv_block(dim, dim, 3, None, False)
 
         self.highway = pax.Sequential(

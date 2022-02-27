@@ -222,7 +222,6 @@ def train(batch_size: int = BATCH_SIZE, lr: float = LR):
         text_dim=TEXT_DIM,
         attn_rnn_dim=ATTN_RNN_DIM,
     )
-    print(net.summary())
 
     if USE_MP:
         scaler = jmp.DynamicLossScale(jnp.array(2**15, dtype=jnp.float32))
