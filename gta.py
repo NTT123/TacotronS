@@ -2,7 +2,6 @@
 Generate ground truth-aligned (gta) dataset from trained model.
 
 Usage:
-
     python gta.py --ckpt=ckpts/mono_tts_tpu_0120000.ckpt
 """
 
@@ -36,6 +35,9 @@ TF_DATA_DIR = config["TF_DATA_DIR"]
 TF_GTA_DATA_DIR = config["TF_DATA_DIR"]
 USE_MP = config["USE_MP"]
 PAD_TOKEN = config["PAD_TOKEN"]
+PRENET_DIM = config["PRENET_DIM"]
+RNN_DIM = config["RNN_DIM"]
+TEXT_DIM = config["TEXT_DIM"]
 
 
 def prepare_batch(batch):
@@ -86,6 +88,9 @@ def main():
         mel_min=MEL_MIN,
         sigmoid_noise=SIGMOID_NOISE,
         pad_token=PAD_TOKEN,
+        prenet_dim=PRENET_DIM,
+        rnn_dim=RNN_DIM,
+        text_dim=TEXT_DIM,
     )
 
     _, net, _ = load_ckpt(net, None, args.ckpt)

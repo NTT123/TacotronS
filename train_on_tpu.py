@@ -43,6 +43,9 @@ TEST_DATA_SIZE = 100  # no testing when training on TPU
 TF_DATA_DIR = config["TF_DATA_DIR"]
 USE_MP = config["USE_MP"]
 PAD_TOKEN = config["PAD_TOKEN"]
+PRENET_DIM = config["PRENET_DIM"]
+RNN_DIM = config["RNN_DIM"]
+TEXT_DIM = config["TEXT_DIM"]
 
 
 def make_data_loader(batch_size: int, split: str = "train"):
@@ -251,7 +254,11 @@ def train(batch_size: int = BATCH_SIZE, lr: float = LR):
         mel_min=MEL_MIN,
         sigmoid_noise=SIGMOID_NOISE,
         pad_token=PAD_TOKEN,
+        prenet_dim=PRENET_DIM,
+        rnn_dim=RNN_DIM,
+        text_dim=TEXT_DIM,
     )
+    print(net.summary())
 
     def lr_decay(step):
         e = jnp.floor(step * 1.0 / 50_000)
@@ -300,7 +307,8 @@ def train(batch_size: int = BATCH_SIZE, lr: float = LR):
             duration = end - start
             start = end
             print(
-                f"step {step:07d}  loss {loss:.3f}  LR {optim[-1].learning_rate[0]:.3e}  {duration:.2f}s"
+                f"step {step:07d}  loss {loss:.3f}  LR {optim[-1].learning_rate[0]:.3e}  {duration:.2f}s",
+                flush=True,
             )
 
         if step % 10_000 == 0:

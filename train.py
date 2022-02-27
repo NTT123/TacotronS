@@ -36,6 +36,9 @@ TEST_DATA_SIZE = config["TEST_DATA_SIZE"]
 TF_DATA_DIR = config["TF_DATA_DIR"]
 USE_MP = config["USE_MP"]
 PAD_TOKEN = config["PAD_TOKEN"]
+PRENET_DIM = config["PRENET_DIM"]
+RNN_DIM = config["RNN_DIM"]
+TEXT_DIM = config["TEXT_DIM"]
 
 
 def double_buffer(ds):
@@ -213,7 +216,11 @@ def train(batch_size: int = BATCH_SIZE, lr: float = LR):
         mel_min=MEL_MIN,
         sigmoid_noise=SIGMOID_NOISE,
         pad_token=PAD_TOKEN,
+        prenet_dim=PRENET_DIM,
+        rnn_dim=RNN_DIM,
+        text_dim=TEXT_DIM,
     )
+    print(net.summary())
 
     if USE_MP:
         scaler = jmp.DynamicLossScale(jnp.array(2**15, dtype=jnp.float32))
@@ -267,7 +274,8 @@ def train(batch_size: int = BATCH_SIZE, lr: float = LR):
         print(
             "step {:07d}  epoch {:05d}  loss {:.3f}  test loss {:.3f}  gradscale {:.0f}  {:.2f}s".format(
                 step, epoch, loss, test_loss, scaler.loss_scale, duration
-            )
+            ),
+            flush=True,
         )
 
         if epoch % 10 == 0:

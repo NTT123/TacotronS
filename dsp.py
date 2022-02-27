@@ -7,7 +7,6 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 import librosa
-from einops import rearrange
 from jax.numpy import ndarray
 
 
@@ -89,8 +88,7 @@ class MelFilter:
         hop_length = self.hop_length
         window_length = self.window_length
         assert len(y.shape) == 2
-        y = rearrange(y, "n s -> s n")
-        spec = batched_stft(y, self.n_fft, hop_length, window_length, "hann")
+        spec = batched_stft(y.T, self.n_fft, hop_length, window_length, "hann")
         mag = jnp.sqrt(jnp.square(spec.real) + jnp.square(spec.imag) + 1e-9)
         mel = jnp.einsum("ms,sfn->nfm", self.melfb, mag)
         cond = jnp.log(jnp.clip(mel, a_min=self.mel_min, a_max=None))
