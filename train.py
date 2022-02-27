@@ -120,14 +120,14 @@ def loss_fn(net: Tacotron, batch, scaler=None):
     go_frame = net.go_frame(mel.shape[0])[:, None, :]
     input_mel = mel[:, (RR - 1) :: RR][:, :-1]
     input_mel = jnp.concatenate((go_frame, input_mel), axis=1)
-    stop_token = mel[..., 0] <= jnp.log(MEL_MIN) + 1e-5
+    stop_token = mel[..., 0] == 0
     net, predictions = pax.purecall(net, input_mel, text)
     (predicted_mel, predicted_mel_postnet, predicted_eos) = predictions
 
     eos_loss = bce_loss(predicted_eos, stop_token)
     post_net_loss = l1_loss(predicted_mel_postnet, mel)
     loss = (l1_loss(predicted_mel, mel) + post_net_loss) / 2
-    mel_mask = mel[..., 0] > jnp.log(MEL_MIN) + 1e-5
+    mel_mask = mel[..., 0] != 0
     # per-frame mel loss
     loss = jnp.sum(loss * mel_mask) / jnp.sum(mel_mask)
     loss = loss + eos_loss * 1e-2
