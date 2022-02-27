@@ -36,7 +36,7 @@ USE_MP = false  # use mixed-precision training
 # data
 TF_DATA_DIR = "./tf_data" # tensorflow data directory
 TF_GTA_DATA_DIR = "./tf_gta_data" # tf gta data directory
-SAMPLE_RATE = 22050 # convert to this sample rate if needed
+SAMPLE_RATE = 24000 # convert to this sample rate if needed
 MEL_DIM = 80 # the dimension of melspectrogram features
 MEL_MIN = 1e-5
 PAD = "_" # padding character

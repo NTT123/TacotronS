@@ -38,7 +38,6 @@ with open(data_dir / "metadata.csv", encoding="utf-8") as f:
         with open(txt_file, "w", encoding="utf-8") as g:
             g.write(normalized_text)
 
-print(
-    f"Data is prepared in the directory {wav_dir}.\n\n"
-    f"Run 'python data.py {wav_dir}' to create the tensorflow dataset."
-)
+print(f"Data is prepared in the directory '{wav_dir}'.")
+print()
+print(f"Run 'python data.py {wav_dir}' to create the tensorflow dataset.")
