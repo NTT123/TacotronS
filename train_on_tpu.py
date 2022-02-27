@@ -46,6 +46,7 @@ PAD_TOKEN = config["PAD_TOKEN"]
 PRENET_DIM = config["PRENET_DIM"]
 RNN_DIM = config["RNN_DIM"]
 TEXT_DIM = config["TEXT_DIM"]
+ATTN_RNN_DIM = config["ATTN_RNN_DIM"]
 
 
 def make_data_loader(batch_size: int, split: str = "train"):
@@ -257,6 +258,7 @@ def train(batch_size: int = BATCH_SIZE, lr: float = LR):
         prenet_dim=PRENET_DIM,
         rnn_dim=RNN_DIM,
         text_dim=TEXT_DIM,
+        attn_rnn_dim=ATTN_RNN_DIM,
     )
     print(net.summary())
 

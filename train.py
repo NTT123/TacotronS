@@ -39,6 +39,7 @@ PAD_TOKEN = config["PAD_TOKEN"]
 PRENET_DIM = config["PRENET_DIM"]
 RNN_DIM = config["RNN_DIM"]
 TEXT_DIM = config["TEXT_DIM"]
+ATTN_RNN_DIM = config["ATTN_RNN_DIM"]
 
 
 def double_buffer(ds):
@@ -186,7 +187,7 @@ def eval_inference(step: int, net: Tacotron, batch):
     inference_fn = pax.pure(lambda net, text: net.inference(text, max_len=400))
     net = net.eval()
     predicted_mel = inference_fn(net, test_text[:1])
-    fig, ax = plt.subplots(2, 1, figsize=(10, 7))
+    fig, ax = plt.subplots(2, 1, figsize=(10, 4))
     del fig
     L = predicted_mel.shape[1]
     ax[0].imshow(
@@ -219,6 +220,7 @@ def train(batch_size: int = BATCH_SIZE, lr: float = LR):
         prenet_dim=PRENET_DIM,
         rnn_dim=RNN_DIM,
         text_dim=TEXT_DIM,
+        attn_rnn_dim=ATTN_RNN_DIM,
     )
     print(net.summary())
 

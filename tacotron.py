@@ -7,15 +7,14 @@ import jax.numpy as jnp
 import pax
 
 
-def conv_block(in_ft, out_ft, kernel_size, activation_fn, use_dropout, dilation=1):
+def conv_block(in_ft, out_ft, kernel_size, activation_fn, use_dropout):
     """
-    Conv >> Layernorm >> activation >> Dropout
+    Conv >> LayerNorm >> activation >> Dropout
     """
-    f = pax.Sequential()
-    f >>= pax.Conv1D(
-        in_ft, out_ft, kernel_size, padding="SAME", with_bias=False, rate=dilation
+    f = pax.Sequential(
+        pax.Conv1D(in_ft, out_ft, kernel_size, with_bias=False),
+        pax.LayerNorm(out_ft, -1, True, True),
     )
-    f >>= pax.LayerNorm(out_ft, -1, True, True)
     if activation_fn is not None:
         f >>= activation_fn
     if use_dropout:
@@ -41,16 +40,16 @@ class HighwayBlock(pax.Module):
         return x
 
 
-class BiLSTM(pax.Module):
+class BiGRU(pax.Module):
     """
-    Bidirectional LSTM
+    Bidirectional GRU
     """
 
     def __init__(self, dim):
         super().__init__()
 
-        self.rnn_fwd = pax.LSTM(dim, dim)
-        self.rnn_bwd = pax.LSTM(dim, dim)
+        self.rnn_fwd = pax.GRU(dim, dim)
+        self.rnn_bwd = pax.GRU(dim, dim)
 
     def __call__(self, x, reset_masks):
         N = x.shape[0]
@@ -83,26 +82,29 @@ class BiLSTM(pax.Module):
         return x
 
 
-class CHR(pax.Module):
+class CBHG(pax.Module):
     """
-    Convs >> Highway net >> RNN
+    Conv Bank >> Highway net >> GRU
     """
 
     def __init__(self, dim):
         super().__init__()
-        self.convs = [
-            conv_block(dim, dim, 3, jax.nn.relu, False, dilation=2**i)
-            for i in range(5)
-        ]
+        self.convs = [conv_block(dim, dim, i, jax.nn.relu, False) for i in range(1, 17)]
+        self.conv_projection_1 = conv_block(dim, dim, 3, jax.nn.relu, False)
+        self.conv_projection_2 = conv_block(dim, dim, 3, None, False)
+
         self.highway = pax.Sequential(
             HighwayBlock(dim), HighwayBlock(dim), HighwayBlock(dim), HighwayBlock(dim)
         )
-        self.rnn = BiLSTM(dim)
+        self.rnn = BiGRU(dim)
 
     def __call__(self, x, x_mask):
-        residual = x
-        for f in self.convs:
-            residual = f(residual * x_mask)
+        conv_input = x * x_mask
+        fts = [f(conv_input) for f in self.convs]
+        residual = jnp.concatenate(fts, axis=-1)
+        residual = pax.max_pool(residual, 2, 1, "SAME", -1)
+        residual = self.conv_projection_1(residual * x_mask)
+        residual = self.conv_projection_2(residual * x_mask)
         x = x + residual
         x = self.highway(x)
         x = self.rnn(x * x_mask, reset_masks=1 - x_mask)
@@ -155,6 +157,7 @@ class Tacotron(pax.Module):
         pad_token,
         prenet_dim=256,
         attn_hidden_dim=128,
+        attn_rnn_dim=256,
         rnn_dim=512,
         postnet_dim=512,
         text_dim=256,
@@ -172,7 +175,7 @@ class Tacotron(pax.Module):
         # encoder submodules
         self.encoder_embed = pax.Embed(256, text_dim)
         self.encoder_pre_net = PreNet(text_dim, 256, prenet_dim, always_dropout=True)
-        self.encoder_cbhg = CHR(prenet_dim)
+        self.encoder_cbhg = CBHG(prenet_dim)
 
         # random key generator
         self.rng_seq = pax.RngSeq()
@@ -181,15 +184,15 @@ class Tacotron(pax.Module):
         self.decoder_pre_net = PreNet(mel_dim, 256, prenet_dim, always_dropout=True)
 
         # decoder submodules
-        self.attn_rnn = pax.LSTM(prenet_dim + prenet_dim * 2, rnn_dim)
+        self.attn_rnn = pax.LSTM(prenet_dim + prenet_dim * 2, attn_rnn_dim)
         self.text_key_fc = pax.Linear(prenet_dim * 2, attn_hidden_dim, with_bias=True)
-        self.attn_query_fc = pax.Linear(rnn_dim, attn_hidden_dim, with_bias=False)
+        self.attn_query_fc = pax.Linear(attn_rnn_dim, attn_hidden_dim, with_bias=False)
 
         self.attn_V = pax.Linear(attn_hidden_dim, 1, with_bias=False)
         self.attn_V_weight_norm = jnp.array(1.0 / jnp.sqrt(attn_hidden_dim))
         self.attn_V_bias = jnp.array(attn_bias)
         self.attn_log = jnp.zeros((1,))
-
+        self.decoder_input = pax.Linear(attn_rnn_dim + 2 * prenet_dim, rnn_dim)
         self.decoder_rnn1 = pax.LSTM(rnn_dim, rnn_dim)
         self.decoder_rnn2 = pax.LSTM(rnn_dim, rnn_dim)
         # mel + end-of-sequence token
@@ -248,7 +251,7 @@ class Tacotron(pax.Module):
         text, text_key = envs
         attn_rnn_input = jnp.concatenate((x, attn_context), axis=-1)
         attn_rnn_state, attn_rnn_output = self.attn_rnn(attn_rnn_state, attn_rnn_input)
-        attn_query_input = jax.nn.relu(attn_rnn_output + attn_context)
+        attn_query_input = attn_rnn_output
         attn_query = self.attn_query_fc(attn_query_input)
         attn_hidden = jnp.tanh(attn_query[:, None, :] + text_key)
         score = self.attn_V(attn_hidden)
@@ -310,7 +313,8 @@ class Tacotron(pax.Module):
         )
         (_, attn_context, attn_pr) = attn_state
         (decoder_rnn_state1, decoder_rnn_state2) = decoder_rnn_states
-        decoder_rnn1_input = attn_rnn_output + attn_context
+        decoder_rnn1_input = jnp.concatenate((attn_rnn_output, attn_context), axis=-1)
+        decoder_rnn1_input = self.decoder_input(decoder_rnn1_input)
         decoder_rnn1 = self.zoneout_lstm(self.decoder_rnn1, zk1)
         decoder_rnn_state1, decoder_rnn_output1 = decoder_rnn1(
             decoder_rnn_state1, decoder_rnn1_input
@@ -321,7 +325,6 @@ class Tacotron(pax.Module):
             decoder_rnn_state2, decoder_rnn2_input
         )
         x = decoder_rnn1_input + decoder_rnn_output1 + decoder_rnn_output2
-        x = jax.nn.relu(x)
         decoder_rnn_states = (decoder_rnn_state1, decoder_rnn_state2)
         return attn_state, decoder_rnn_states, rng_key_next, x, attn_pr[0]
 
