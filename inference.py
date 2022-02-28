@@ -6,9 +6,8 @@ import jax.numpy as jnp
 import numpy as np
 import pax
 
-from tacotron import Tacotron
 from text import english_cleaners
-from utils import load_ckpt, load_config
+from utils import create_tacotron_model, load_ckpt, load_config
 
 parser = ArgumentParser(description="Convert text to melspectrogram")
 
@@ -30,16 +29,7 @@ text = text + config["PAD"] * 10
 tokens = [alphabet.index(c) for c in text]
 print("Tokens:", tokens)
 
-net = Tacotron(
-    mel_dim=config["MEL_DIM"],
-    attn_bias=config["ATTN_BIAS"],
-    rr=config["RR"],
-    max_rr=config["MAX_RR"],
-    mel_min=config["MEL_MIN"],
-    sigmoid_noise=config["SIGMOID_NOISE"],
-    pad_token=config["PAD_TOKEN"],
-)
-
+net = create_tacotron_model(config)
 _, net, _ = load_ckpt(net, None, args.model)
 net = net.eval()
 net = jax.device_put(net)

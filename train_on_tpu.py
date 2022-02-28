@@ -14,7 +14,7 @@ import pax
 import tensorflow as tf
 
 from tacotron import Tacotron
-from utils import load_ckpt, load_config, save_ckpt
+from utils import create_tacotron_model, load_ckpt, load_config, save_ckpt
 
 # TPU setup
 if "COLAB_TPU_ADDR" in os.environ:
@@ -25,28 +25,16 @@ STEPS_PER_CALL = 10
 print("Devices:", DEVICES)
 
 config = load_config()
-ATTN_BIAS = config["ATTN_BIAS"]
-BATCH_SIZE = config["BATCH_SIZE"]
 LOG_DIR = Path(config["LOG_DIR"])
 CKPT_DIR = Path(config["CKPT_DIR"])
-LR = config["LR"]
-MAX_RR = config["MAX_RR"]
-MEL_DIM = config["MEL_DIM"]
-MEL_MIN = config["MEL_MIN"]
 if "MODEL_PREFIX" in os.environ:
     MODEL_PREFIX = os.environ["MODEL_PREFIX"]
 else:
     MODEL_PREFIX = config["MODEL_PREFIX"]
 RR = config["RR"]
-SIGMOID_NOISE = config["SIGMOID_NOISE"]
 TEST_DATA_SIZE = 100  # no testing when training on TPU
 TF_DATA_DIR = config["TF_DATA_DIR"]
 USE_MP = config["USE_MP"]
-PAD_TOKEN = config["PAD_TOKEN"]
-PRENET_DIM = config["PRENET_DIM"]
-RNN_DIM = config["RNN_DIM"]
-TEXT_DIM = config["TEXT_DIM"]
-ATTN_RNN_DIM = config["ATTN_RNN_DIM"]
 
 
 def make_data_loader(batch_size: int, split: str = "train"):
@@ -239,7 +227,7 @@ def plot_prediction(step, net, batch):
     plt.close()
 
 
-def train(batch_size: int = BATCH_SIZE, lr: float = LR):
+def train(batch_size: int = config["BATCH_SIZE"], lr: float = config["LR"]):
     """
     train tacotron model
     """
@@ -247,19 +235,7 @@ def train(batch_size: int = BATCH_SIZE, lr: float = LR):
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     CKPT_DIR.mkdir(parents=True, exist_ok=True)
 
-    net = Tacotron(
-        mel_dim=MEL_DIM,
-        attn_bias=ATTN_BIAS,
-        rr=RR,
-        max_rr=MAX_RR,
-        mel_min=MEL_MIN,
-        sigmoid_noise=SIGMOID_NOISE,
-        pad_token=PAD_TOKEN,
-        prenet_dim=PRENET_DIM,
-        rnn_dim=RNN_DIM,
-        text_dim=TEXT_DIM,
-        attn_rnn_dim=ATTN_RNN_DIM,
-    )
+    net = create_tacotron_model(config)
 
     def lr_decay(step):
         e = jnp.floor(step * 1.0 / 50_000)

@@ -155,15 +155,38 @@ class Tacotron(pax.Module):
         mel_min,
         sigmoid_noise,
         pad_token,
-        prenet_dim=256,
-        attn_hidden_dim=128,
-        attn_rnn_dim=256,
-        rnn_dim=512,
-        postnet_dim=512,
-        text_dim=256,
+        prenet_dim,
+        attn_hidden_dim,
+        attn_rnn_dim,
+        rnn_dim,
+        postnet_dim,
+        text_dim,
     ):
+        """
+        New Tacotron model
+
+        Args:
+            mel_dim (int): dimension of log mel-spectrogram features.
+            attn_bias (float): control how "slow" the attention will
+                move forward at initialization.
+            rr (int): the reduction factor.
+                Number of predicted frame at each time step. Default is 2.
+            max_rr (int): max value of rr.
+            mel_min (float): the minimum value of mel features.
+                The <go> frame is filled by `log(mel_min)` values.
+            sigmoid_noise (float): the variance of gaussian noise added
+                to attention scores in training.
+            pad_token (int): the pad value at the end of text sequences.
+            prenet_dim (int): dimension of prenet output.
+            attn_hidden_dim (int): dimension of attention hidden vectors.
+            attn_rnn_dim (int): number of cells in the attention RNN.
+            rnn_dim (int): number of cells in the decoder RNNs.
+            postnet_dim (int): number of features in the postnet convolutions.
+            text_dim (int): dimension of text embedding vectors.
+        """
         super().__init__()
         self.text_dim = text_dim
+        assert rr <= max_rr
         self.rr = rr
         self.max_rr = max_rr
         self.mel_dim = mel_dim
