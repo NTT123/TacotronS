@@ -15,29 +15,13 @@ import pax
 import tensorflow as tf
 from tqdm.cli import tqdm
 
-from tacotron import Tacotron
-from utils import load_ckpt, load_config
+from utils import create_tacotron_model, load_ckpt, load_config
 
 config = load_config()
-ATTN_BIAS = config["ATTN_BIAS"]
-BATCH_SIZE = config["BATCH_SIZE"]
-LOG_DIR = Path(config["LOG_DIR"])
-CKPT_DIR = Path(config["CKPT_DIR"])
-LR = config["LR"]
-MAX_RR = config["MAX_RR"]
-MEL_DIM = config["MEL_DIM"]
-MEL_MIN = config["MEL_MIN"]
-MODEL_PREFIX = config["MODEL_PREFIX"]
 RR = config["RR"]
-SIGMOID_NOISE = config["SIGMOID_NOISE"]
-TEST_DATA_SIZE = config["TEST_DATA_SIZE"]
 TF_DATA_DIR = config["TF_DATA_DIR"]
 TF_GTA_DATA_DIR = config["TF_DATA_DIR"]
 USE_MP = config["USE_MP"]
-PAD_TOKEN = config["PAD_TOKEN"]
-PRENET_DIM = config["PRENET_DIM"]
-RNN_DIM = config["RNN_DIM"]
-TEXT_DIM = config["TEXT_DIM"]
 
 
 def prepare_batch(batch):
@@ -65,7 +49,7 @@ def generate_gta(net, batch):
     net, predictions = pax.purecall(net, input_mel, text)
     (_, predicted_mel_postnet, _) = predictions
     assert predicted_mel_postnet.shape == mel.shape
-    mel_mask = mel > jnp.log(MEL_MIN) + 1e-5
+    mel_mask = mel != 0
     predicted_mel_postnet = jnp.where(mel_mask, predicted_mel_postnet, mel)
     return predicted_mel_postnet
 
@@ -80,18 +64,7 @@ def main():
     )
     args = parser.parse_args()
 
-    net = Tacotron(
-        mel_dim=MEL_DIM,
-        attn_bias=ATTN_BIAS,
-        rr=RR,
-        max_rr=MAX_RR,
-        mel_min=MEL_MIN,
-        sigmoid_noise=SIGMOID_NOISE,
-        pad_token=PAD_TOKEN,
-        prenet_dim=PRENET_DIM,
-        rnn_dim=RNN_DIM,
-        text_dim=TEXT_DIM,
-    )
+    net = create_tacotron_model(config)
 
     _, net, _ = load_ckpt(net, None, args.ckpt)
     net = jax.device_put(net.eval())

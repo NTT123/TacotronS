@@ -94,7 +94,7 @@ def create_tf_data(data_dir: Path, output_dir: Path):
             o.append(alphabet.index(c))
         text_tokens.append(o)
     sorted_files = sorted(wav_files, key=os.path.getsize)
-    y, _ = librosa.load(sorted_files[-1], sr=SAMPLE_RATE)
+    y, _ = librosa.load(sorted_files[-1], sr=SAMPLE_RATE, res_type="soxr_hq")
     mel = mel_filter(y[None])[0].astype(jnp.float16)
     mel_shape = mel.shape
     max_wav_len = len(y)
@@ -104,7 +104,7 @@ def create_tf_data(data_dir: Path, output_dir: Path):
         random.Random(42).shuffle(data)
         data = tqdm(data)
         for text, wav_file in data:
-            wav, rate = librosa.load(wav_file, sr=SAMPLE_RATE)
+            wav, rate = librosa.load(wav_file, sr=SAMPLE_RATE, res_type="soxr_hq")
             assert rate == SAMPLE_RATE
             assert max_wav_len >= len(wav)
             pads = [(0, max_wav_len - wav.shape[0])]
