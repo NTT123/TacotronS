@@ -100,7 +100,7 @@ def create_tf_data(data_dir: Path, output_dir: Path):
             assert max_wav_len >= len(wav)
             wav = wav / max(1.0, np.max(np.abs(wav)))  # rescale to avoid overflow
             pads = [(0, max_wav_len - wav.shape[0])]
-            mel_len = len(wav) // HOP_LENGTH - WINDOW_LENGTH // HOP_LENGTH + 1
+            mel_len = len(wav) // HOP_LENGTH + 1
             wav = np.pad(wav, pads, constant_values=0)
             mel = mel_filter(wav[None])[0].astype(jnp.float16)
             mel = mel.at[mel_len:].set(0)
