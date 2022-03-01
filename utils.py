@@ -2,12 +2,22 @@
 Utility functions
 """
 import pickle
+import random
 from pathlib import Path
 
 import pax
 import toml
 
 from tacotron import Tacotron
+
+
+def get_wav_files(data_dir: Path):
+    """
+    Get all *.wav files in the data directory.
+    """
+    files = sorted(data_dir.glob("*.wav"))
+    random.Random(42).shuffle(files)
+    return files
 
 
 def load_config(config_file=Path("pyproject.toml")):

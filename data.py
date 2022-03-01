@@ -15,7 +15,7 @@ import tensorflow as tf
 from tqdm.cli import tqdm
 
 from dsp import MelFilter
-from utils import load_config
+from utils import get_wav_files, load_config
 
 config = load_config()
 SAMPLE_RATE = config["SAMPLE_RATE"]
@@ -66,15 +66,6 @@ def get_alphabet(wav_files):
     texts = get_transcripts(wav_files)
     alphabet = [PAD] + sorted(set("".join(texts)))
     return alphabet
-
-
-def get_wav_files(data_dir: Path):
-    """
-    Get all *.wav files in the data directory.
-    """
-    files = sorted(data_dir.glob("*.wav"))
-    random.Random(42).shuffle(files)
-    return files
 
 
 def create_tf_data(data_dir: Path, output_dir: Path):
