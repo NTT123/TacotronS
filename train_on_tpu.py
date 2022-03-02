@@ -14,7 +14,15 @@ import pax
 import tensorflow as tf
 
 from tacotron import Tacotron
-from utils import create_tacotron_model, load_ckpt, load_config, save_ckpt
+from utils import (
+    bce_loss,
+    create_tacotron_model,
+    l1_loss,
+    load_ckpt,
+    load_config,
+    prepare_train_batch,
+    save_ckpt,
+)
 
 # TPU setup
 if "COLAB_TPU_ADDR" in os.environ:
@@ -42,9 +50,9 @@ def make_data_loader(batch_size: int, split: str = "train"):
     return a dataloader of mini-batches
     """
     tfdata = tf.data.experimental.load(str(TF_DATA_DIR))
+    tfdata = tfdata.map(lambda ident, text, mel: (text, mel))
     tfdata = tfdata.shuffle(len(tfdata), seed=42)
     if split == "train":
-
         tfdata = tfdata.skip(TEST_DATA_SIZE).cache()
         L = len(tfdata)
         tfdata = tfdata.repeat()
@@ -54,42 +62,6 @@ def make_data_loader(batch_size: int, split: str = "train"):
     tfdata = tfdata.batch(batch_size, drop_remainder=True)
     tfdata = tfdata.prefetch(tf.data.AUTOTUNE)
     return tfdata
-
-
-def prepare_train_batch(batch, random_start=True):
-    """
-    Prepare the mini-batch for training:
-    - make sure that the sequence length is divisible by the reduce factor RR.
-    - randomly select the start frame.
-    """
-    text, mel = batch
-    N, L, D = mel.shape
-    L = L // RR * RR
-    mel = mel[:, :L]
-    if random_start:
-        idx = random.randint(0, RR - 1)
-    else:
-        idx = 0
-    if RR > 1:
-        mel = mel[:, idx : (idx - RR)]
-    return text, mel
-
-
-def bce_loss(logit, target):
-    """
-    return binary cross entropy loss
-    """
-    llh1 = jax.nn.log_sigmoid(logit) * target
-    llh2 = jax.nn.log_sigmoid(-logit) * (1 - target)
-    return -jnp.mean(llh1 + llh2)
-
-
-def l1_loss(x, y):
-    """
-    compute the l1 loss
-    """
-    delta = x - y
-    return jnp.mean(jnp.abs(delta), axis=-1)
 
 
 def loss_fn(net: Tacotron, batch, scaler=None):
@@ -143,7 +115,7 @@ def pmap_double_buffer(ds):
     batch = None
     for next_batch in ds:
         assert next_batch is not None
-        next_batch = prepare_train_batch(next_batch)
+        next_batch = prepare_train_batch(next_batch, RR)
         next_batch = jax.tree_map(partial(batch_reshape, K=NUM_DEVICES), next_batch)
         next_batch = _device_put_sharded(next_batch)
         if batch is not None:
@@ -257,7 +229,7 @@ def train(batch_size: int = config["BATCH_SIZE"], lr: float = config["LR"]):
     # initialize attn_log
     test_data_loader = make_data_loader(1, "test")
     test_batch = next(iter(test_data_loader.as_numpy_iterator()))
-    test_batch = prepare_train_batch(test_batch, random_start=False)
+    test_batch = prepare_train_batch(test_batch, RR, random_start=False)
     text, mel = test_batch
     N, L = text.shape
     N, T, D = mel.shape

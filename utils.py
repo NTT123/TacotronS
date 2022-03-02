@@ -5,6 +5,8 @@ import pickle
 import random
 from pathlib import Path
 
+import jax
+import jax.numpy as jnp
 import pax
 import toml
 
@@ -72,3 +74,39 @@ def create_tacotron_model(config):
         postnet_dim=config["POSTNET_DIM"],
         text_dim=config["TEXT_DIM"],
     )
+
+
+def prepare_train_batch(batch, reduction_factor, random_start=True):
+    """
+    Prepare the mini-batch for training:
+    - make sure that the sequence length is divisible by the reduce factor RR.
+    - randomly select the start frame.
+    """
+    text, mel = batch
+    N, L, D = mel.shape
+    L = L // reduction_factor * reduction_factor
+    mel = mel[:, :L]
+    if random_start:
+        idx = random.randint(0, reduction_factor - 1)
+    else:
+        idx = 0
+    if reduction_factor > 1:
+        mel = mel[:, idx : (idx - reduction_factor)]
+    return text, mel
+
+
+def bce_loss(logit, target):
+    """
+    return binary cross entropy loss
+    """
+    llh1 = jax.nn.log_sigmoid(logit) * target
+    llh2 = jax.nn.log_sigmoid(-logit) * (1 - target)
+    return -jnp.mean(llh1 + llh2)
+
+
+def l1_loss(x, y):
+    """
+    compute the l1 loss
+    """
+    delta = x - y
+    return jnp.mean(jnp.abs(delta), axis=-1)

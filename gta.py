@@ -32,11 +32,11 @@ def prepare_batch(batch):
     """
     Prepare batch for gta data generation
     """
-    text, mel = batch
+    ident, text, mel = batch
     N, L, D = mel.shape
     L = L // RR * RR
     mel = mel[:, :L]
-    return text, mel
+    return ident, text, mel
 
 
 @jax.jit
@@ -84,12 +84,11 @@ def main():
 
     length = len(data_loader)
 
-    for wav_file, batch in tqdm(
-        zip(wav_files, data_loader.as_numpy_iterator()), total=length
-    ):
-        mel_file = args.output_dir / f"{wav_file.stem}.mel.npy"
-        batch = prepare_batch(batch)
-        batch = jax.device_put(batch)
+    for batch in tqdm(data_loader.as_numpy_iterator(), total=length):
+        ident, text, mel = prepare_batch(batch)
+        ident = ident[0].decode("utf-8")
+        mel_file = args.output_dir / f"{ident}.mel.npy"
+        batch = jax.device_put((text, mel))
         mel = jax.device_get(generate_gta(net, batch).astype(jnp.float16))
         np.save(mel_file, mel[0])
 

@@ -106,9 +106,10 @@ def create_tf_data(data_dir: Path, output_dir: Path):
             mel = mel.at[mel_len:].set(0)
             mel = jax.device_get(mel)
             text = np.array(text, dtype=np.int32)
-            yield text, mel
+            yield wav_file.stem, text, mel
 
     output_signature = (
+        tf.TensorSpec(shape=(), dtype=tf.string),
         tf.TensorSpec(shape=[len(text_tokens[0])], dtype=tf.int32),
         tf.TensorSpec(shape=mel_shape, dtype=tf.float16),
     )

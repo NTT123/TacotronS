@@ -15,7 +15,15 @@ from pax.experimental import apply_scaled_gradients
 from tqdm.cli import tqdm
 
 from tacotron import Tacotron
-from utils import create_tacotron_model, load_ckpt, load_config, save_ckpt
+from utils import (
+    bce_loss,
+    create_tacotron_model,
+    l1_loss,
+    load_ckpt,
+    load_config,
+    prepare_train_batch,
+    save_ckpt,
+)
 
 config = load_config()
 LOG_DIR = Path(config["LOG_DIR"])
@@ -52,6 +60,7 @@ def make_data_loader(batch_size: int, split: str = "train"):
     return a dataloader of mini-batches
     """
     tfdata = tf.data.experimental.load(str(TF_DATA_DIR))
+    tfdata = tfdata.map(lambda ident, text, mel: (text, mel))
     tfdata = tfdata.shuffle(len(tfdata), seed=42)
     if split == "train":
         tfdata = tfdata.skip(TEST_DATA_SIZE).cache()
@@ -61,42 +70,6 @@ def make_data_loader(batch_size: int, split: str = "train"):
     tfdata = tfdata.batch(batch_size, drop_remainder=True)
     tfdata = tfdata.prefetch(tf.data.AUTOTUNE)
     return tfdata
-
-
-def prepare_train_batch(batch, random_start=True):
-    """
-    Prepare the mini-batch for training:
-    - make sure that the sequence length is divisible by the reduce factor RR.
-    - randomly select the start frame.
-    """
-    text, mel = batch
-    N, L, D = mel.shape
-    L = L // RR * RR
-    mel = mel[:, :L]
-    if random_start:
-        idx = random.randint(0, RR - 1)
-    else:
-        idx = 0
-    if RR > 1:
-        mel = mel[:, idx : (idx - RR)]
-    return text, mel
-
-
-def bce_loss(logit, target):
-    """
-    return binary cross entropy loss
-    """
-    llh1 = jax.nn.log_sigmoid(logit) * target
-    llh2 = jax.nn.log_sigmoid(-logit) * (1 - target)
-    return -jnp.mean(llh1 + llh2)
-
-
-def l1_loss(x, y):
-    """
-    compute the l1 loss
-    """
-    delta = x - y
-    return jnp.mean(jnp.abs(delta), axis=-1)
 
 
 def loss_fn(net: Tacotron, batch, scaler=None):
@@ -146,7 +119,7 @@ def eval_score(net: Tacotron, data_loader):
     net = net.eval()
     data_iter = double_buffer(data_loader.as_numpy_iterator())
     for batch in data_iter:
-        batch = prepare_train_batch(batch, random_start=False)
+        batch = prepare_train_batch(batch, RR, random_start=False)
         loss, _ = fast_loss_fn(net, batch)
         losses.append(loss)
     loss = sum(losses) / len(losses)
@@ -226,7 +199,7 @@ def train(batch_size: int = config["BATCH_SIZE"], lr: float = config["LR"]):
     start = time.perf_counter()
     start_epoch = (last_step + 1) // len(data_loader)
     test_batch = next(iter(test_data_loader.as_numpy_iterator()))
-    test_batch = prepare_train_batch(test_batch)
+    test_batch = prepare_train_batch(test_batch, RR)
     # initialize attn_log
     text, mel = test_batch
     N, L = text.shape
@@ -239,7 +212,7 @@ def train(batch_size: int = config["BATCH_SIZE"], lr: float = config["LR"]):
         for batch in tqdm(
             data_iter, total=len(data_loader), leave=False, desc=f"epoch {epoch}"
         ):
-            batch = prepare_train_batch(batch)
+            batch = prepare_train_batch(batch, RR)
             step = step + 1
             net, optim, scaler, loss = train_step(net, optim, scaler, batch)
             losses.append(loss)
