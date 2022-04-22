@@ -45,11 +45,10 @@ MEL_DIM = 80 # the dimension of melspectrogram features
 MEL_MIN = 1e-5
 PAD = "_" # padding character
 PAD_TOKEN = 0
-TEST_DATA_SIZE = 1024
 
 # model
 RR = 2 # reduction factor
-MAX_RR=2
+MAX_RR = 2
 ATTN_BIAS = 0.0 # control how slow the attention moves forward
 SIGMOID_NOISE = 2.0
 PRENET_DIM = 128
