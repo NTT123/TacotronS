@@ -1,6 +1,7 @@
 """
 Utility functions
 """
+import os
 import pickle
 import random
 from pathlib import Path
@@ -24,9 +25,23 @@ def get_wav_files(data_dir: Path):
 
 def load_config(config_file=Path("pyproject.toml")):
     """
-    Load the project configurations
+    Load the project configurations.
+    
+    Override an attribute if it is in the environment variables.
+    However, this is a hack and only a few attributes can be overridden.
     """
-    return toml.load(config_file)["tacotron"]
+    config = toml.load(config_file)["tacotron"]
+
+    if "MODEL_PREFIX" in os.environ:
+        config["MODEL_PREFIX"] = os.environ["MODEL_PREFIX"]
+
+    if "RR" in os.environ:
+        config["RR"] = int(os.environ["RR"])
+
+    if "TRAINING_STEPS" in os.environ:
+        config["TRAINING_STEPS"] = int(os.environ["TRAINING_STEPS"])
+
+    return config
 
 
 def load_ckpt(net: pax.Module, optim: pax.Module, path):

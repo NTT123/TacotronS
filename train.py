@@ -1,18 +1,16 @@
 import os
-import random
 import time
+from functools import partial
 from pathlib import Path
 
 import fire
 import jax
 import jax.numpy as jnp
-import jmp
+import jax.tools.colab_tpu
 import matplotlib.pyplot as plt
 import opax
 import pax
 import tensorflow as tf
-from pax.experimental import apply_scaled_gradients
-from tqdm.cli import tqdm
 
 from tacotron import Tacotron
 from utils import (
@@ -25,34 +23,22 @@ from utils import (
     save_ckpt,
 )
 
+# TPU setup
+if "COLAB_TPU_ADDR" in os.environ:
+    jax.tools.colab_tpu.setup_tpu()
+DEVICES = jax.devices()
+NUM_DEVICES = len(DEVICES)
+print("Devices:", DEVICES)
+
 config = load_config()
+RR = config["RR"]
+USE_MP = config["USE_MP"]
 LOG_DIR = Path(config["LOG_DIR"])
 CKPT_DIR = Path(config["CKPT_DIR"])
-if "MODEL_PREFIX" in os.environ:
-    MODEL_PREFIX = os.environ["MODEL_PREFIX"]
-else:
-    MODEL_PREFIX = config["MODEL_PREFIX"]
-RR = config["RR"]
-TEST_DATA_SIZE = config["TEST_DATA_SIZE"]
 TF_DATA_DIR = config["TF_DATA_DIR"]
-USE_MP = config["USE_MP"]
-
-
-def double_buffer(ds):
-    """
-    create a double-buffer iterator
-    """
-    batch = None
-
-    for next_batch in ds:
-        assert next_batch is not None
-        next_batch = jax.device_put(next_batch)
-        if batch is not None:
-            yield batch
-        batch = next_batch
-
-    if batch is not None:
-        yield batch
+MODEL_PREFIX = config["MODEL_PREFIX"]
+STEPS_PER_CALL = config["STEPS_PER_CALL"]
+TEST_DATA_SIZE = config["TEST_DATA_SIZE"]
 
 
 def make_data_loader(batch_size: int, split: str = "train"):
@@ -64,7 +50,9 @@ def make_data_loader(batch_size: int, split: str = "train"):
     tfdata = tfdata.shuffle(len(tfdata), seed=42)
     if split == "train":
         tfdata = tfdata.skip(TEST_DATA_SIZE).cache()
-        tfdata = tfdata.shuffle(len(tfdata), reshuffle_each_iteration=True)
+        L = len(tfdata)
+        tfdata = tfdata.repeat()
+        tfdata = tfdata.shuffle(L, reshuffle_each_iteration=True)
     elif split == "test":
         tfdata = tfdata.take(TEST_DATA_SIZE).cache()
     tfdata = tfdata.batch(batch_size, drop_remainder=True)
@@ -100,30 +88,82 @@ def loss_fn(net: Tacotron, batch, scaler=None):
 fast_loss_fn = jax.jit(loss_fn)
 
 
-@jax.jit
-def train_step(net: Tacotron, optim: pax.Module, scaler, batch):
+def batch_reshape(x, K):
+    """
+    add a new first dimension
+    """
+    N, *L = x.shape
+    return jnp.reshape(x, (K, N // K, *L))
+
+
+def _device_put_sharded(sharded_tree):
+    leaves, treedef = jax.tree_flatten(sharded_tree)
+    n = leaves[0].shape[0]
+    return jax.device_put_sharded(
+        [jax.tree_unflatten(treedef, [l[i] for l in leaves]) for i in range(n)], DEVICES
+    )
+
+
+def pmap_double_buffer(ds):
+    """
+    create a double buffer iterator for jax.pmap training
+    """
+    batch = None
+    for next_batch in ds:
+        assert next_batch is not None
+        next_batch = prepare_train_batch(next_batch, RR)
+        next_batch = jax.tree_map(partial(batch_reshape, K=NUM_DEVICES), next_batch)
+        next_batch = _device_put_sharded(next_batch)
+        if batch is not None:
+            yield batch
+        batch = next_batch
+    if batch is not None:
+        yield batch
+
+
+def train_step(net: Tacotron, optim: pax.Module, batch):
     """
     one training step
     """
-    (loss, net), grads = pax.value_and_grad(loss_fn, has_aux=True)(net, batch, scaler)
-    loss = scaler.unscale(loss)
-    net, optim, scaler = apply_scaled_gradients(net, optim, scaler, grads)
-    return net, optim, scaler, loss
+    (loss, net), grads = pax.value_and_grad(loss_fn, has_aux=True)(net, batch, None)
+    grads = jax.lax.pmean(grads, axis_name="i")
+    net, optim = opax.apply_gradients(net, optim, grads)
+    return net, optim, loss
 
 
-def eval_score(net: Tacotron, data_loader):
+@partial(jax.pmap, axis_name="i")
+def train_multiple_step(net, optim, batch):
     """
-    evaluate the model on the test set
+    multiple training steps
     """
-    losses = []
+
+    def loop(prev, inputs):
+        net, optim = prev
+        batch = inputs
+        net, optim, loss = train_step(net, optim, batch)
+        return (net, optim), loss
+
+    state = (net, optim)
+    inputs = jax.tree_map(partial(batch_reshape, K=STEPS_PER_CALL), batch)
+    state, output = jax.lax.scan(loop, state, inputs)
+    net, optim = state
+    loss = jnp.mean(output)
+    return net, optim, loss
+
+
+@jax.jit
+def gta_prediction(net, batch):
+    """
+    GTA prediction
+    """
     net = net.eval()
-    data_iter = double_buffer(data_loader.as_numpy_iterator())
-    for batch in data_iter:
-        batch = prepare_train_batch(batch, RR, random_start=False)
-        loss, _ = fast_loss_fn(net, batch)
-        losses.append(loss)
-    loss = sum(losses) / len(losses)
-    return loss
+    text, mel = batch
+    go_frame = net.go_frame(mel.shape[0])[:, None, :]
+    input_mel = mel[:, (RR - 1) :: RR][:, :-1]
+    input_mel = jnp.concatenate((go_frame, input_mel), axis=1)
+    net, predictions = pax.purecall(net, input_mel, text)
+    (_, predicted_mel_postnet, _) = predictions
+    return mel, predicted_mel_postnet
 
 
 def plot_attn(step, attn_weight):
@@ -138,28 +178,20 @@ def plot_attn(step, attn_weight):
     plt.close()
 
 
-def eval_inference(step: int, net: Tacotron, batch):
+def plot_prediction(step, net, batch):
     """
-    evaluate inference mode
+    plot mel prediction
     """
-    test_text, test_mel = batch
-    test_text = test_text[:1]
-    test_mel = test_mel[:1]
-    inference_fn = pax.pure(lambda net, text: net.inference(text, max_len=400))
-    net = net.eval()
-    predicted_mel = inference_fn(net, test_text[:1])
-    fig, ax = plt.subplots(2, 1, figsize=(10, 4))
-    del fig
-    L = predicted_mel.shape[1]
-    ax[0].imshow(
-        test_mel[0, :L].T.astype(jnp.float32), origin="lower", interpolation="nearest"
-    )
+    eval_net = jax.tree_map(lambda x: x[0], net.eval())
+    gt_mel, predicted_mel = gta_prediction(eval_net, batch)
+    fig, ax = plt.subplots(2, 1, figsize=(10, 6))
+    gt_mel = gt_mel[0].astype(jnp.float32).T
+    ax[0].imshow(gt_mel, aspect="auto", origin="lower")
     ax[0].set_title("ground truth")
-    ax[1].imshow(
-        predicted_mel[0].T.astype(jnp.float32), origin="lower", interpolation="nearest"
-    )
+    predicted_mel = predicted_mel[0].astype(jnp.float32).T
+    ax[1].imshow(predicted_mel, aspect="auto", origin="lower")
     ax[1].set_title("prediction")
-    plt.savefig(LOG_DIR / f"{MODEL_PREFIX}_mel_{step:07d}.png")
+    plt.savefig(LOG_DIR / f"{MODEL_PREFIX}_mels_{step:07d}.png")
     plt.close()
 
 
@@ -167,71 +199,70 @@ def train(batch_size: int = config["BATCH_SIZE"], lr: float = config["LR"]):
     """
     train tacotron model
     """
+    assert batch_size % NUM_DEVICES == 0
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     CKPT_DIR.mkdir(parents=True, exist_ok=True)
 
     net = create_tacotron_model(config)
 
-    if USE_MP:
-        scaler = jmp.DynamicLossScale(jnp.array(2**15, dtype=jnp.float32))
-        net = net.apply(pax.experimental.default_mp_policy)
-    else:
-        scaler = jmp.NoOpLossScale()
+    def lr_decay(step):
+        e = jnp.floor(step * 1.0 / 50_000)
+        return jnp.exp2(-e) * lr
 
     optim = opax.chain(
         opax.clip_by_global_norm(1.0),
         opax.scale_by_adam(),
-        opax.scale(lr),
+        opax.scale_by_schedule(lr_decay),
     ).init(net.parameters())
 
-    data_loader = make_data_loader(batch_size, "train")
-    test_data_loader = make_data_loader(batch_size, "test")
-
-    last_step = -1
+    last_step = -STEPS_PER_CALL
     files = sorted(CKPT_DIR.glob(f"{MODEL_PREFIX}_*.ckpt"))
     if len(files) > 0:
         print("loading", files[-1])
         last_step, net, optim = load_ckpt(net, optim, files[-1])
         net, optim = jax.device_put((net, optim))
 
-    step = last_step
-    losses = []
-    start = time.perf_counter()
-    start_epoch = (last_step + 1) // len(data_loader)
-    test_batch = next(iter(test_data_loader.as_numpy_iterator()))
-    test_batch = prepare_train_batch(test_batch, RR)
     # initialize attn_log
+    test_data_loader = make_data_loader(1, "test")
+    test_batch = next(iter(test_data_loader.as_numpy_iterator()))
+    test_batch = prepare_train_batch(test_batch, RR, random_start=False)
     text, mel = test_batch
     N, L = text.shape
     N, T, D = mel.shape
     net = net.replace(attn_log=jnp.zeros((L, T // RR)))
 
-    for epoch in range(start_epoch, 10000):
-        losses = []
-        data_iter = double_buffer(data_loader.as_numpy_iterator())
-        for batch in tqdm(
-            data_iter, total=len(data_loader), leave=False, desc=f"epoch {epoch}"
-        ):
-            batch = prepare_train_batch(batch, RR)
-            step = step + 1
-            net, optim, scaler, loss = train_step(net, optim, scaler, batch)
-            losses.append(loss)
-        test_loss = eval_score(net, test_data_loader)
-        loss = sum(losses) / len(losses)
-        end = time.perf_counter()
-        duration = end - start
-        start = end
-        print(
-            "step {:07d}  epoch {:05d}  loss {:.3f}  test loss {:.3f}  gradscale {:.0f}  {:.2f}s".format(
-                step, epoch, loss, test_loss, scaler.loss_scale, duration
-            ),
-            flush=True,
-        )
+    # replicate on multiple cores
+    net, optim = jax.device_put_replicated((net, optim), DEVICES)
 
-        if epoch % 10 == 0:
-            save_ckpt(CKPT_DIR, MODEL_PREFIX, step, net, optim)
-            plot_attn(step, net.attn_log)
-            eval_inference(step, net, test_batch)
+    step = last_step
+    data_loader = make_data_loader(batch_size * STEPS_PER_CALL, "train")
+    data_iter = pmap_double_buffer(data_loader.as_numpy_iterator())
+    start = time.perf_counter()
+    loss_sum = 0.0
+    log_interval = 10
+    for batch in data_iter:
+        step = step + STEPS_PER_CALL
+        if step > config["TRAINING_STEPS"]:
+            break
+        net, optim, loss = train_multiple_step(net, optim, batch)
+        loss_sum = loss_sum + loss
+
+        if (step // STEPS_PER_CALL) % log_interval == 0:
+            loss = jnp.mean(loss_sum).item() / log_interval
+            loss_sum = 0.0
+            end = time.perf_counter()
+            duration = end - start
+            start = end
+            print(
+                f"step {step:07d}  loss {loss:.3f}  LR {optim[-1].learning_rate[0]:.3e}  {duration:.2f}s",
+                flush=True,
+            )
+
+        if step % 10_000 == 0:
+            net_, optim_ = jax.tree_map(lambda x: x[0], (net, optim))
+            save_ckpt(CKPT_DIR, MODEL_PREFIX, step, net_, optim_)
+            plot_attn(step, net.attn_log[0])
+            plot_prediction(step, net, test_batch)
 
 
 if __name__ == "__main__":

@@ -27,12 +27,15 @@ build-backend = "poetry.core.masonry.api"
 [tacotron]
 
 # training
+TRAINING_STEPS = 500000
 BATCH_SIZE = 64
 LR=1024e-6 # learning rate
 MODEL_PREFIX = "mono_tts_cbhg_small"
 LOG_DIR = "./logs"
 CKPT_DIR = "./ckpts"
 USE_MP = false  # use mixed-precision training
+STEPS_PER_CALL = 10
+TEST_DATA_SIZE = 100
 
 # data
 TF_DATA_DIR = "./tf_data" # tensorflow data directory
