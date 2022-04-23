@@ -47,7 +47,7 @@ PAD = "_" # padding character
 PAD_TOKEN = 0
 
 # model
-RR = 2 # reduction factor
+RR = 1 # reduction factor
 MAX_RR = 2
 ATTN_BIAS = 0.0 # control how slow the attention moves forward
 SIGMOID_NOISE = 2.0
