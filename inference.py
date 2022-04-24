@@ -25,7 +25,9 @@ text = english_cleaners(args.text)
 print("Input: ", text)
 
 config = load_config()
-text = text + config["PAD"] * 10
+assert config["PAD"] not in text
+assert config["END_CHARACTER"] not in text
+text = text + config["END_CHARACTER"] + config["PAD"] * 10
 tokens = [alphabet.index(c) for c in text]
 print("Tokens:", tokens)
 

@@ -26,7 +26,7 @@ def get_wav_files(data_dir: Path):
 def load_config(config_file=Path("pyproject.toml")):
     """
     Load the project configurations.
-    
+
     Override an attribute if it is in the environment variables.
     However, this is a hack and only a few attributes can be overridden.
     """

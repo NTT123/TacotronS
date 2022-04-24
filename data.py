@@ -23,6 +23,7 @@ MEL_DIM = config["MEL_DIM"]
 MEL_MIN = config["MEL_MIN"]
 PAD_TOKEN = config["PAD_TOKEN"]
 PAD = config["PAD"]
+END_CHARACTER = config["END_CHARACTER"]
 TF_DATA_DIR = Path(config["TF_DATA_DIR"])
 SAMPLE_RATE = config["SAMPLE_RATE"]
 WINDOW_LENGTH = SAMPLE_RATE * 500 // 10_000  # 50.0 ms
@@ -43,9 +44,10 @@ mel_filter = MelFilter(
 mel_filter = jax.jit(mel_filter)
 
 
-def get_transcripts(wav_files):
+def get_transcripts_w_end_character(wav_files):
     """
     Read all *.txt files that corresponding to *.wav files.
+    Add END_CHARACTER to the end of the transcripts.
     """
     texts = []
     for file_path in wav_files:
@@ -53,6 +55,8 @@ def get_transcripts(wav_files):
         with open(txt_path, "r", encoding="utf-8") as f:
             text = f.read().strip()
             assert PAD not in text
+            assert END_CHARACTER not in text
+            text = text + END_CHARACTER
             texts.append(text)
     return texts
 
@@ -63,7 +67,7 @@ def get_alphabet(wav_files):
 
     The padding character is also included.
     """
-    texts = get_transcripts(wav_files)
+    texts = get_transcripts_w_end_character(wav_files)
     alphabet = [PAD] + sorted(set("".join(texts)))
     return alphabet
 
@@ -73,7 +77,7 @@ def create_tf_data(data_dir: Path, output_dir: Path):
     Create a tensorflow dataset
     """
     wav_files = get_wav_files(data_dir)
-    texts = get_transcripts(wav_files)
+    texts = get_transcripts_w_end_character(wav_files)
     maxlen = max(map(len, texts))
     padded_texts = [l + PAD * (maxlen - len(l)) for l in texts]
     alphabet = get_alphabet(wav_files)
