@@ -65,11 +65,11 @@ def get_alphabet(wav_files):
     """
     Return a list of all characters in the transcripts.
 
-    The padding character is also included.
+    The [pad] character and [end] character are also included.
     """
     texts = get_transcripts_w_end_character(wav_files)
-    alphabet = [PAD] + sorted(set("".join(texts)))
-    return alphabet
+    alphabet = sorted(set("".join(texts)) - {END_CHARACTER})
+    return [PAD, END_CHARACTER] + alphabet
 
 
 def create_tf_data(data_dir: Path, output_dir: Path):
