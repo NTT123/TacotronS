@@ -358,6 +358,7 @@ class Tacotron(pax.Module):
         text = self.encode_text(text)
         text_key = self.text_key_fc(text)
         N, L, D = text.shape
+        assert N == 1
         mel = self.go_frame(N)
 
         @jax.jit
@@ -377,7 +378,10 @@ class Tacotron(pax.Module):
             x = x[:, : self.rr, :]
             x = jnp.reshape(x, (N, self.rr, -1))
             mel = x[..., :-1]
-            eos = x[..., -1]
+            eos_logit = x[..., -1]
+            eos_pr = jax.nn.sigmoid(eos_logit[0, -1])
+            rng_key, eos_rng_key = jax.random.split(rng_key)
+            eos = jax.random.bernoulli(eos_rng_key, p=eos_pr)
             return attn_state, decoder_rnn_states, rng_key, (mel, eos)
 
         attn_state, decoder_rnn_states = self.decoder_initial_state(N, L)
@@ -390,7 +394,7 @@ class Tacotron(pax.Module):
                 attn_state, decoder_rnn_states, rng_key, mel
             )
             mels.append(mel)
-            if eos[0, -1].item() > 0 or count > max_len:
+            if eos.item() or count > max_len:
                 break
 
             mel = mel[:, -1, :]

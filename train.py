@@ -70,6 +70,7 @@ def loss_fn(net: Tacotron, batch, scaler=None):
     input_mel = mel[:, (RR - 1) :: RR][:, :-1]
     input_mel = jnp.concatenate((go_frame, input_mel), axis=1)
     stop_token = mel[..., 0] == 0
+    stop_token = jnp.concatenate((stop_token[:, 1:], stop_token[:, -1:]), axis=1)
     net, predictions = pax.purecall(net, input_mel, text)
     (predicted_mel, predicted_mel_postnet, predicted_eos) = predictions
 
