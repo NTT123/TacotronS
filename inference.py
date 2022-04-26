@@ -6,7 +6,6 @@ import jax.numpy as jnp
 import numpy as np
 import pax
 
-from text import english_cleaners
 from utils import create_tacotron_model, load_ckpt, load_config
 
 parser = ArgumentParser(description="Convert text to melspectrogram")
@@ -21,7 +20,7 @@ with open(args.alphabet_file, "r", encoding="utf-8") as f:
     alphabet = f.read().split("\n")
 
 
-text = english_cleaners(args.text)
+text = args.text
 print("Input: ", text)
 
 config = load_config()
